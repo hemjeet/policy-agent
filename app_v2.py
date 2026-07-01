@@ -20,6 +20,7 @@ from langgraph.types import Command
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.postgres import dict_row
 from psycopg_pool import AsyncConnectionPool
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver 
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -27,7 +28,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from langchain_google_genai import ChatGoogleGenerativeAI
 from slowapi.errors import RateLimitExceeded
 
-from agent import PolicyAgent
+from agent import PolicyAgentV2
+from agent.config import TOOLS
 import gradio as gr
 from gradio_ui import create_demo
 
@@ -92,6 +94,7 @@ def _init_vectorstore(postgres_uri: str, embeddings: OpenAIEmbeddings):
         return None
 
 
+
 # ── Pydantic schemas ──────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str
@@ -128,38 +131,30 @@ async def lifespan(app: FastAPI):
 
 
     # 6. Agent graph
-    agent = PolicyAgent(llm=llm, router_llm= router_llm)
-    graph = agent.graph
-    logger.info("  [ OK ] Agent graph compiled")
+    DB_URI = os.getenv('REDIS_URL')
+    async with AsyncRedisSaver.from_conn_string(DB_URI) as checkpointer:
+        await checkpointer.setup()
+        logger.info("  [ OK ] Redis checkpointer connected")
+        
+        agent = PolicyAgentV2(llm=llm, router_llm=router_llm, checkpointer=checkpointer, tools=TOOLS)
+        graph = agent.graph
+        logger.info("  [ OK ] Agent graph compiled")
 
-    # Store on app.state
-    app.state.graph = graph
-    app.state.vectorstore = vectorstore
-    # app.state.checkpointer_pool = checkpointer_pool
-    # app.state.semantic_cache = semantic_cache
+        # Store on app.state
+        app.state.graph = graph
+        app.state.vectorstore = vectorstore
 
-    elapsed = time.perf_counter() - t0
-    logger.info("─" * 56)
-    logger.info("  Startup complete (%.2fs)", elapsed)
-    logger.info("─" * 56)
-    yield
+        elapsed = time.perf_counter() - t0
+        logger.info("─" * 56)
+        logger.info("  Startup complete (%.2fs)", elapsed)
+        logger.info("─" * 56)
+        
+        yield
 
-    # Shutdown
-    logger.info("─" * 56)
-    logger.info("  Shutdown")
-    logger.info("─" * 56)
-    # if semantic_cache:
-    #     try:
-    #         deleted = semantic_cache.cleanup_expired()
-    #         logger.info("  [ OK ] Semantic cache: cleaned %d expired entries", deleted)
-    #     except Exception as e:
-    #         logger.warning("  [FAIL] Semantic cache cleanup error: %s", e)
-    # if checkpointer_pool:
-    #     try:
-    #         await checkpointer_pool.close()
-    #         logger.info("  [ OK ] Checkpointer pool closed")
-    #     except Exception as e:
-    #         logger.warning("  [FAIL] Error closing checkpointer pool: %s", e)
+        # Shutdown
+        logger.info("─" * 56)
+        logger.info("  Shutdown")
+        logger.info("─" * 56)
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────
@@ -243,6 +238,8 @@ async def chat_stream(req: ChatRequest):
 
     async def event_stream():
         try:
+            t_start = time.perf_counter()
+            logger.info("STREAM START thread=%s msg='%s'", thread_id[:8], req.message[:50])
             async for msg_chunk, metadata in graph.astream(
                 {"messages": [input_msg]}, config, stream_mode="messages"
             ):
@@ -252,6 +249,7 @@ async def chat_stream(req: ChatRequest):
                     and metadata.get("langgraph_node") == "llm_call"
                 ):
                     yield f"data: {json.dumps({'content': msg_chunk.content})}\n\n"
+            logger.info("STREAM DONE thread=%s time=%.2fs", thread_id[:8], time.perf_counter() - t_start)
             yield "data: [DONE]\n\n"
         except Exception as e:
             logger.exception("Stream error")

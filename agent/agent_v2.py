@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import re
+import asyncio
 from langchain_core.messages import (
     AIMessage, HumanMessage, SystemMessage,
 )
@@ -11,6 +12,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt.tool_node import ToolNode
 from langchain_community.cache import RedisSemanticCache
 from langchain_openai import OpenAIEmbeddings
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver 
 
 from .config import (
     SYSTEM_PROMPT, TOOLS, KB_TOOL, ROUTER_PROMPT,
@@ -22,9 +24,10 @@ logger = logging.getLogger(__name__)
 
 
 class PolicyAgentV2:
-    def __init__(self, router_llm, llm, tools):
+    def __init__(self, router_llm, llm, checkpointer, tools):
         self.router_llm = router_llm
         self.llm = llm
+        self.checkpointer = checkpointer
         self.cache = RedisSemanticCache(
             redis_url=REDIS_URL,
             embedding=OpenAIEmbeddings(model="text-embedding-3-small"),
@@ -46,7 +49,7 @@ class PolicyAgentV2:
             }
         return None
 
-    def _router_llm(self, state: PolicyAgentState) -> str:
+    async def _router_llm(self, state: PolicyAgentState) -> str:
         messages = state['messages']
         last_human_message = None
         for msg in reversed(messages):
@@ -62,7 +65,7 @@ class PolicyAgentV2:
                 SystemMessage(content=ROUTER_PROMPT),
                 HumanMessage(content=f"Classify this query: {last_human_message.content}")
             ]
-            response = self.router_llm.invoke(router_messages)
+            response = await self.router_llm.ainvoke(router_messages, config={"callbacks": []})
 
             content = response.content.strip()
             if content.startswith("```"):
@@ -82,11 +85,11 @@ class PolicyAgentV2:
         updates = {}
         if messages and isinstance(messages[-1], HumanMessage):
             iteration_count = 1
-            intent = self._router_llm(state)
+            intent = await self._router_llm(state)
             updates['intent'] = intent
 
             if intent == "KNOWLEDGE_BASE":
-                cached = self.cache.lookup(messages[-1].content, llm_string="kb")
+                cached = await asyncio.to_thread(self.cache.lookup, messages[-1].content, llm_string="kb")
                 if cached:
                     updates['messages'] = AIMessage(content=cached[0].text)
                     updates['iteration_count'] = iteration_count
@@ -105,15 +108,23 @@ class PolicyAgentV2:
             tool_mode = TOOLS
 
         llm_with_tools = self.llm.bind_tools(tool_mode)
+        logger.info("LLM call | intent=%s | tools=%s | msg_count=%d",
+                    intent, [t.name for t in tool_mode], len(messages))
         response = await llm_with_tools.ainvoke(
             [SystemMessage(content=SYSTEM_PROMPT), *messages]
         )
+
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            logger.info("LLM wants tools: %s", [tc['name'] for tc in response.tool_calls])
+        if response.content:
+            preview = response.content[:120].replace("\n", "\\n")
+            logger.info("LLM response | %.120s", preview)
 
         updates['messages'] = response
         updates['iteration_count'] = iteration_count
         return updates
 
-    def _should_continue(self, state: PolicyAgentState):
+    async def _should_continue(self, state: PolicyAgentState):
         last_msg = state['messages'][-1]
 
         if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
@@ -125,7 +136,8 @@ class PolicyAgentV2:
         if state.get('intent') == 'KNOWLEDGE_BASE' and isinstance(last_msg, AIMessage):
             for msg in reversed(state['messages']):
                 if isinstance(msg, HumanMessage):
-                    self.cache.update(
+                    await asyncio.to_thread(
+                        self.cache.update,
                         msg.content,
                         llm_string="kb",
                         return_val=[Generation(text=last_msg.content)],
@@ -155,4 +167,4 @@ class PolicyAgentV2:
         workflow.add_edge('tools', 'llm_call')
         workflow.add_edge('kb_tools', 'llm_call')
 
-        return workflow.compile(checkpointer=MemorySaver())
+        return workflow.compile(checkpointer=self.checkpointer)

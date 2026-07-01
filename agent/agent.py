@@ -90,7 +90,7 @@ class PolicyAgent:
             updates['intent'] = intent
 
             if intent == "KNOWLEDGE_BASE":
-                cached = self.cache.lookup(messages[-1].content)
+                cached = await asyncio.to_thread(self.cache.lookup, messages[-1].content)
                 if cached:
                     updates['messages'] = AIMessage(content=cached)
                     updates['iteration_count'] = iteration_count
@@ -126,7 +126,7 @@ class PolicyAgent:
         updates['iteration_count'] = iteration_count
         return updates
 
-    def _should_continue(self, state: PolicyAgentState):
+    async def _should_continue(self, state: PolicyAgentState):
         last_msg = state['messages'][-1]
 
         if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
@@ -138,7 +138,7 @@ class PolicyAgent:
         if state.get('intent') == 'KNOWLEDGE_BASE' and isinstance(last_msg, AIMessage) and not state.get('cached_hit'):
             for msg in reversed(state['messages']):
                 if isinstance(msg, HumanMessage):
-                    self.cache.store(msg.content, last_msg.content)
+                    await asyncio.to_thread(self.cache.store, msg.content, last_msg.content)
                     break
 
         return END

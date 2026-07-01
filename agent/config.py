@@ -46,6 +46,9 @@ handbook and knowledge base. Use this FIRST for general, how-to, or policy quest
 before attempting to answer from memory.
 - **check_claim_status(phone_number)** — look up all claims for a customer by their \
 registered phone number. Returns claim details and full status-change history.
+- **get_customer_info(email, phone, customer_id)** — look up a customer profile by \
+email, phone number, or internal ID. Returns name, address, total policies, active \
+policies, and pending claims count.
 
 ## Guidelines
 
@@ -57,7 +60,8 @@ registered phone number. Returns claim details and full status-change history.
 **check_claim_status** after asking for their registered phone number.
 - For policy-specific questions (e.g. "what is my coverage?", "when does my policy expire?"), \
 ask for their policy number or phone number first.
-- If the customer provides an email or phone number at the start, use that to look them up.
+- If the customer provides their email or phone number, look up their profile first \
+using **get_customer_info** to personalize your responses.
 
 ### Tone & Style
 - Always be polite, professional, and empathetic — insurance can be stressful.
@@ -134,10 +138,12 @@ Ensure your output is valid JSON and contains no other text."""
 # ---------------------------------------------------------------------------
 
 from tools.check_claim_status import check_claim_status as _check_claim_status
+from tools.get_customer_info import get_customer_info as _get_customer_info
 from tools.search_knowledge_base import search_knowledge_base as _search_knowledge_base
 
 TOOLS = [
     _check_claim_status,
+    _get_customer_info,
 ]
 
 KB_TOOL = [_search_knowledge_base]
