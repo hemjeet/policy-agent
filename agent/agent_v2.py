@@ -30,7 +30,7 @@ class PolicyAgentV2:
         self.checkpointer = checkpointer
         self.cache = RedisSemanticCache(
             redis_url=REDIS_URL,
-            embedding=OpenAIEmbeddings(model="text-embedding-3-small"),
+            embeddings=OpenAIEmbeddings(model="text-embedding-3-small"),
             distance_threshold=0.1,
             ttl=KB_CACHE_TTL,
         )
