@@ -11,7 +11,6 @@ langchain_postgres==0.0.17
 langchain_text_splitters==1.1.2
 langgraph-checkpoint-redis==0.5.0
 langgraph==1.2.7
-locustio==0.999
 openai==2.44.0
 pgvector==0.3.6
 psycopg_pool==3.3.1
