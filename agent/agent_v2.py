@@ -10,7 +10,7 @@ from langchain_core.outputs import Generation
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt.tool_node import ToolNode
-from langchain_community.cache import RedisSemanticCache
+from langchain_redis import RedisSemanticCache
 from langchain_openai import OpenAIEmbeddings
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver 
 
@@ -31,7 +31,7 @@ class PolicyAgentV2:
         self.cache = RedisSemanticCache(
             redis_url=REDIS_URL,
             embedding=OpenAIEmbeddings(model="text-embedding-3-small"),
-            score_threshold=KB_CACHE_THRESHOLD,
+            distance_threshold=0.1,
             ttl=KB_CACHE_TTL,
         )
         self.graph = self._build_graph()

@@ -40,6 +40,7 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
 # Copy application code (after .dockerignore filters out junk)
 COPY --chown=appuser:appuser . .
 
+RUN chown appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
