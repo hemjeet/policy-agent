@@ -18,7 +18,6 @@ psycopg_pool==3.3.1
 pydantic==2.13.4
 python-dotenv==1.2.2
 slowapi==0.1.10
-SQLAlchemy==1.4.39
 SQLAlchemy==2.0.37
 tiktoken==0.11.0
 uvicorn==0.49.0
