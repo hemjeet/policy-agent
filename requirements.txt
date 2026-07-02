@@ -12,8 +12,8 @@ langchain-community>=0.3.0
 langchain-postgres>=0.0.12    # PGVector store (langchain_pg_embedding)
 langchain-text-splitters>=0.3.0
 langgraph>=0.2.0
-langgraph-checkpoint-redis>=1.0.0
-langgraph-checkpoint-postgres>=1.0.0
+langgraph-checkpoint-redis
+langgraph-checkpoint-postgres
 openai>=1.30.0
 
 # --- Web UI & API ---
