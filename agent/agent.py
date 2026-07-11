@@ -59,11 +59,10 @@ class PolicyAgent:
                 SystemMessage(content=ROUTER_PROMPT),
                 HumanMessage(content=f"Classify this query: {last_human_message.content}")
             ]
-            # Empty callbacks → prevents router tokens from leaking into
-            # the message stream (stream_mode="messages" captures all LLM
+
             # calls within a node by default).
             response = await self.router_llm.ainvoke(
-                router_messages, config={"callbacks": []}
+                router_messages, config= {"callbacks": []}
             )
             
             content = response.content.strip()
@@ -115,6 +114,7 @@ class PolicyAgent:
         response = await llm_with_tools.ainvoke(
             [SystemMessage(content=SYSTEM_PROMPT), *messages]
         )
+
 
         if hasattr(response, 'tool_calls') and response.tool_calls:
             logger.info("LLM wants tools: %s", [tc['name'] for tc in response.tool_calls])

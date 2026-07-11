@@ -11,6 +11,13 @@ import gradio as gr
 
 TIMEOUT = 120
 
+CUSTOM_CSS = """
+.policy-header { text-align: center; margin-bottom: 0.5em; }
+.policy-header h1 { margin: 0; color: #1a56db; }
+.policy-header p  { margin: 0; color: #6b7280; }
+footer { display: none !important; }
+"""
+
 
 def create_demo(api_base: str = "http://localhost:8000"):
     """Build and return a Gradio Blocks app configured for the given API base URL."""
@@ -58,45 +65,44 @@ def create_demo(api_base: str = "http://localhost:8000"):
         if not history:
             return
 
-        user_message = history[-1]["content"]
+        messages = list(history)
+        raw_content = messages[-1]["content"]
+        if isinstance(raw_content, str):
+            user_message = raw_content
+        elif isinstance(raw_content, list) and raw_content:
+            user_message = raw_content[0].get("text", str(raw_content[0]))
+        else:
+            user_message = str(raw_content)
         tid = thread_id or str(uuid.uuid4())
 
         try:
             if use_stream:
-                history.append({"role": "assistant", "content": ""})
+                messages.append({"role": "assistant", "content": ""})
                 async for partial in _stream_chat(user_message, tid):
-                    history[-1]["content"] = partial
-                    yield history, tid
+                    messages[-1] = {"role": "assistant", "content": partial}
+                    yield list(messages), tid
             else:
                 answer, tid = await _batch_chat(user_message, tid)
-                history.append({"role": "assistant", "content": answer})
-                yield history, tid
+                messages.append({"role": "assistant", "content": answer})
+                yield messages, tid
         except httpx.HTTPStatusError as e:
-            history.append({"role": "assistant", "content": (
+            messages.append({"role": "assistant", "content": (
                 f"**API Error ({e.response.status_code})**: {e.response.text[:300]}"
             )})
-            yield history, tid
+            yield messages, tid
         except httpx.ConnectError:
-            history.append({"role": "assistant", "content": (
+            messages.append({"role": "assistant", "content": (
                 f"Could not connect to the API at `{api_base}`.\n\n"
                 "Make sure the FastAPI server is running."
             )})
-            yield history, tid
+            yield messages, tid
         except Exception as e:
-            history.append({"role": "assistant", "content": f"**Unexpected error**: {str(e)}"})
-            yield history, tid
-
-    custom_css = """
-    .policy-header { text-align: center; margin-bottom: 0.5em; }
-    .policy-header h1 { margin: 0; color: #1a56db; }
-    .policy-header p  { margin: 0; color: #6b7280; }
-    footer { display: none !important; }
-    """
+            messages.append({"role": "assistant", "content": f"**Unexpected error**: {str(e)}"})
+            yield messages, tid
 
     with gr.Blocks(
-        css=custom_css,
         title="SecureLife Insurance — Policy Agent",
-        theme=gr.themes.Soft(primary_hue="blue"),
+        css=CUSTOM_CSS,
     ) as demo:
         thread_state = gr.State(None)
 
@@ -110,7 +116,6 @@ def create_demo(api_base: str = "http://localhost:8000"):
         )
 
         chatbot = gr.Chatbot(
-            type="messages",
             label="Policy Agent",
             placeholder="<strong>Examples:</strong><br>"
             "&bull; &nbsp;<em>How do I file a health insurance claim?</em><br>"
@@ -118,7 +123,7 @@ def create_demo(api_base: str = "http://localhost:8000"):
             "&bull; &nbsp;<em>Is my health insurance premium tax deductible?</em><br>"
             "&bull; &nbsp;<em>What documents do I need for a motor claim?</em>",
             height=520,
-            show_copy_button=True,
+            buttons=["copy"],
         )
 
         with gr.Row():
@@ -136,7 +141,7 @@ def create_demo(api_base: str = "http://localhost:8000"):
             clear_btn = gr.Button("New Chat", variant="secondary", scale=1)
 
         msg.submit(
-            fn=lambda m, h: (h + [{"role": "user", "content": m}], ""),
+            fn=lambda m, h: ((h or []) + [{"role": "user", "content": m}], ""),
             inputs=[msg, chatbot],
             outputs=[chatbot, msg],
             queue=False,
@@ -160,4 +165,6 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         share=False,
+        css=CUSTOM_CSS,
+        theme=gr.themes.Soft(primary_hue="blue"),
     )
