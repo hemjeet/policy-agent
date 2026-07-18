@@ -41,6 +41,7 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
 COPY --chown=appuser:appuser . .
 
 RUN chown appuser:appuser /app
+
 # Switch to non-root user
 USER appuser
 

@@ -3,8 +3,9 @@ import json
 import logging
 import re
 import asyncio
+from typing import List
 from langchain_core.messages import (
-    AIMessage, HumanMessage, SystemMessage,
+    AIMessage, HumanMessage, SystemMessage, filter_messages, trim_messages, BaseMessage
 )
 from langchain_core.outputs import Generation
 from langgraph.checkpoint.memory import MemorySaver
@@ -48,6 +49,23 @@ class PolicyAgentV2:
                 'iteration_count': iteration_count,
             }
         return None
+    
+    def _trim_context(self, messages: List[BaseMessage]) -> List[BaseMessage]:
+        filtered = filter_messages(messages, include_types=["human", "ai", "tool"])
+        trimmed = trim_messages(
+            messages= filtered,
+            strategy="last",
+            start_on="human",
+            include_system=False,
+            allow_partial=False,
+            max_tokens =
+            
+        )
+
+        if not trimmed:
+            trimmed = messages[-10:]
+        logger.info("Trimmed to %d messages (from %d)", len(trimmed), len(messages))
+        return trimmed
 
     async def _router_llm(self, state: PolicyAgentState) -> str:
         messages = state['messages']
@@ -110,8 +128,10 @@ class PolicyAgentV2:
         llm_with_tools = self.llm.bind_tools(tool_mode)
         logger.info("LLM call | intent=%s | tools=%s | msg_count=%d",
                     intent, [t.name for t in tool_mode], len(messages))
+        trimmed = self._trim_context(messages)
+        
         response = await llm_with_tools.ainvoke(
-            [SystemMessage(content=SYSTEM_PROMPT), *messages]
+            [SystemMessage(content=SYSTEM_PROMPT), *trimmed]
         )
 
         if hasattr(response, 'tool_calls') and response.tool_calls:
