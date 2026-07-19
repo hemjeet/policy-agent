@@ -14,7 +14,7 @@ from langgraph.prebuilt.tool_node import ToolNode
 from langchain_redis import RedisSemanticCache
 from langchain_openai import OpenAIEmbeddings
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver 
-
+import tiktoken
 from .config import (
     SYSTEM_PROMPT, TOOLS, KB_TOOL, ROUTER_PROMPT,
     REDIS_URL, KB_CACHE_THRESHOLD, KB_CACHE_TTL,
@@ -22,6 +22,30 @@ from .config import (
 from .state import PolicyAgentState
 
 logger = logging.getLogger(__name__)
+MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "4000"))
+MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "5"))
+
+
+def tiktoken_counter(messages: list[BaseMessage]) -> int:
+    """Fallback token counter using cl100k_base since deepseek model isn't recognized."""
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")
+
+    num_tokens = 0
+    for msg in messages:
+        content = msg.content
+        if isinstance(content, list):
+            text = " ".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        else:
+            text = str(content) if content else ""
+        num_tokens += len(encoding.encode(text)) + 4
+    return num_tokens
 
 
 class PolicyAgentV2:
@@ -57,8 +81,8 @@ class PolicyAgentV2:
             strategy="last",
             start_on="human",
             include_system=False,
-            allow_partial=False,
-            max_tokens =
+            max_tokens=MAX_CONTEXT_TOKENS,
+            token_counter=tiktoken_counter
             
         )
 
