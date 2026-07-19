@@ -155,15 +155,13 @@ async def agno_lifespan(app, agent_os):
         graph = policy_agent.graph
         logger.info("  [ OK ] Agent graph compiled")
 
-        # ✅ Wire graph into LangGraphAgent
+
         lg_agent.graph = graph
         lg_agent.config = {"configurable": {"vectorstore": vectorstore}}
 
-        # ✅ Make graph/vectorstore available on app.state for /chat routes
         app.state.graph = graph
         app.state.vectorstore = vectorstore
 
-        # ✅ Resync AgentOS with the real graph
         agent_os.resync(app=app)
         logger.info("  [ OK ] AgentOS resynced")
 
@@ -291,7 +289,7 @@ def _resolve_thread_id(req_thread_id: str | None) -> str:
 # ── AgentOS ────────────────────────────────────────────────────────────
 agent_os = AgentOS(
     agents=[lg_agent],
-    lifespan=agno_lifespan,   # ✅ single lifespan for everything
+    lifespan=agno_lifespan,
     tracing=False,
     db=SqliteDb(db_file="tmp/agentos.db"),
     base_app=_base_app,
