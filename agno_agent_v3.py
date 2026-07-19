@@ -14,8 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_core.messages import HumanMessage, AIMessageChunk, AIMessage
-from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -84,10 +83,10 @@ def _init_vectorstore(postgres_uri: str, embeddings: OpenAIEmbeddings):
             connection=postgres_uri,
             use_jsonb=True,
         )
-        logger.info("  [ OK ] Vectorstore (PGVector) connected")
+        logger.info("  [ OK ] vectorstore (PGVector) connected")
         return vs
     except Exception as e:
-        logger.warning("  [FAIL] Vectorstore connection failed: %s", e)
+        logger.warning("  [FAIL] vectorstore connection failed: %s", e)
         return None
 
 
@@ -138,11 +137,10 @@ async def agno_lifespan(app, agent_os):
     if not postgres_uri:
         logger.warning("  [SKIP] POSTGRES_URI not set - vectorstore disabled")
 
-    redis_url = os.getenv("REDIS_URL")
-    if not redis_url:
+    if not postgres_uri:
         raise RuntimeError("REDIS_URL environment variable is required")
 
-    async with AsyncRedisSaver.from_conn_string(redis_url) as checkpointer:
+    async with AsyncPostgresSaver.from_conn_string(postgres_uri) as checkpointer:
         await checkpointer.setup()
         logger.info("  [ OK ] Redis checkpointer connected")
 
@@ -300,4 +298,4 @@ app = agent_os.get_app()
 
 
 if __name__ == "__main__":
-    agent_os.serve(app="agno_agent_v2:app", reload=True)
+    agent_os.serve(app="agno_agent_v3:app", reload=True)

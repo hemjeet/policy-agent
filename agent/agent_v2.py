@@ -48,6 +48,38 @@ def tiktoken_counter(messages: list[BaseMessage]) -> int:
     return num_tokens
 
 
+def _trim_context(messages: List[BaseMessage]) -> List[BaseMessage]:
+    filtered = filter_messages(messages, include_types=["human", "ai", "tool"])
+    trimmed = trim_messages(
+        messages= filtered,
+        strategy="last",
+        start_on="human",
+        include_system=False,
+        max_tokens=MAX_CONTEXT_TOKENS,
+        token_counter=tiktoken_counter
+
+    )
+
+    if not trimmed:
+        trimmed = messages[-10:]
+    logger.info("Trimmed to %d messages (from %d)", len(trimmed), len(messages))
+    return trimmed
+
+
+def _force_stop(iteration_count: int) -> dict | None:
+    if iteration_count > int(os.getenv("MAX_ITERATIONS", "5")):
+        return {
+            'messages': [
+                AIMessage(
+                    content="I'm having trouble completing this request. "
+                        "Let me connect you with a support agent."
+                )
+            ],
+            'iteration_count': iteration_count,
+        }
+    return None
+
+
 class PolicyAgentV2:
     def __init__(self, router_llm, llm, checkpointer, tools):
         self.router_llm = router_llm
@@ -60,36 +92,6 @@ class PolicyAgentV2:
             ttl=KB_CACHE_TTL,
         )
         self.graph = self._build_graph()
-
-    def _force_stop(self, iteration_count: int) -> dict | None:
-        if iteration_count > int(os.getenv("MAX_ITERATIONS", "5")):
-            return {
-                'messages': [
-                    AIMessage(
-                        content="I'm having trouble completing this request. "
-                            "Let me connect you with a support agent."
-                    )
-                ],
-                'iteration_count': iteration_count,
-            }
-        return None
-    
-    def _trim_context(self, messages: List[BaseMessage]) -> List[BaseMessage]:
-        filtered = filter_messages(messages, include_types=["human", "ai", "tool"])
-        trimmed = trim_messages(
-            messages= filtered,
-            strategy="last",
-            start_on="human",
-            include_system=False,
-            max_tokens=MAX_CONTEXT_TOKENS,
-            token_counter=tiktoken_counter
-            
-        )
-
-        if not trimmed:
-            trimmed = messages[-10:]
-        logger.info("Trimmed to %d messages (from %d)", len(trimmed), len(messages))
-        return trimmed
 
     async def _router_llm(self, state: PolicyAgentState) -> str:
         messages = state['messages']
@@ -140,7 +142,7 @@ class PolicyAgentV2:
             iteration_count = state.get('iteration_count', 0) + 1
             intent = state.get('intent', 'TRANSACTIONAL')
 
-        force_stop = self._force_stop(iteration_count)
+        force_stop = _force_stop(iteration_count)
         if force_stop:
             return force_stop
 
@@ -152,7 +154,7 @@ class PolicyAgentV2:
         llm_with_tools = self.llm.bind_tools(tool_mode)
         logger.info("LLM call | intent=%s | tools=%s | msg_count=%d",
                     intent, [t.name for t in tool_mode], len(messages))
-        trimmed = self._trim_context(messages)
+        trimmed = _trim_context(messages)
         
         response = await llm_with_tools.ainvoke(
             [SystemMessage(content=SYSTEM_PROMPT), *trimmed]

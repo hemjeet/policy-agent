@@ -21,28 +21,28 @@ import tiktoken
 logger = logging.getLogger(__name__)
 
 
+def _force_stop(iteration_count: int) -> dict | None:
+    if iteration_count > int(os.getenv("MAX_ITERATIONS", "5")):
+        return {
+            'messages': [
+                AIMessage(
+                    content="I'm having trouble completing this request. "
+                        "Let me connect you with a support agent."
+                )
+            ],
+            'iteration_count': iteration_count,
+        }
+
+    return None
+
+
 class PolicyAgent:
-    def __init__(self, router_llm, llm):
+    def __init__(self, router_llm, llm, checkpointer, tools):
         self.router_llm = router_llm
         self.llm = llm
         self.cache = SemanticCache()
         self.graph = self._build_graph()
-    
 
-    def _force_stop(self, iteration_count: int) -> dict | None:
-        if iteration_count > int(os.getenv("MAX_ITERATIONS", "5")):
-            return {
-                'messages': [
-                    AIMessage(
-                        content="I'm having trouble completing this request. "
-                            "Let me connect you with a support agent."
-                    )
-                ],
-                'iteration_count': iteration_count,
-            }
-        
-        return None
-    
     async def _router_llm(self, state: PolicyAgentState) -> str:
         messages = state['messages']
         last_human_message = None
@@ -66,7 +66,7 @@ class PolicyAgent:
             )
             
             content = response.content.strip()
-            # Clean markdown code blocks if the LLM outputted them
+            # Clean Markdown code blocks if the LLM outputted them
             if content.startswith("```"):
                 content = re.sub(r"^```(?:json)?\n|```$", "", content, flags=re.IGNORECASE).strip()
             
@@ -99,7 +99,7 @@ class PolicyAgent:
             iteration_count = state.get('iteration_count', 0) + 1
             intent = state.get('intent', 'TRANSACTIONAL')
 
-        force_stop = self._force_stop(iteration_count)
+        force_stop = _force_stop(iteration_count)
         if force_stop:
             return force_stop
 

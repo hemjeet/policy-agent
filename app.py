@@ -29,6 +29,8 @@ from slowapi.errors import RateLimitExceeded
 
 from agent import PolicyAgent
 import gradio as gr
+
+from agent.config import TOOLS
 from gradio_ui import create_demo
 
 
@@ -121,45 +123,59 @@ async def lifespan(app: FastAPI):
     # 1. LLM
     llm, router_llm = _build_llm()
 
-    # 2. Vectorstore
+    # 2. vectorstore
     vectorstore = _init_vectorstore(postgres_uri, embeddings) if postgres_uri else None
     if not postgres_uri:
         logger.warning("  [SKIP] POSTGRES_URI not set - vectorstore disabled")
 
 
     # 6. Agent graph
-    agent = PolicyAgent(llm=llm, router_llm= router_llm)
-    graph = agent.graph
-    logger.info("  [ OK ] Agent graph compiled")
+    try:
+        async with AsyncPostgresSaver.from_conn_string(postgres_uri) as checkpointer:
+            await checkpointer.setup()
 
-    # Store on app.state
-    app.state.graph = graph
-    app.state.vectorstore = vectorstore
-    # app.state.checkpointer_pool = checkpointer_pool
-    # app.state.semantic_cache = semantic_cache
+            agent = PolicyAgent(
+                llm= llm,
+                router_llm= router_llm,
+                checkpointer = checkpointer,
+                tools = TOOLS
+            )
+            graph = agent.graph
+            logger.info("  [ OK ] Agent graph compiled")
 
-    elapsed = time.perf_counter() - t0
-    logger.info("─" * 56)
-    logger.info("  Startup complete (%.2fs)", elapsed)
-    logger.info("─" * 56)
-    yield
+            # Store on app.state
+            app.state.graph = graph
+            app.state.vectorstore = vectorstore
+            # app.state.checkpointer_pool = checkpointer_pool
+            # app.state.semantic_cache = semantic_cache
+
+            elapsed = time.perf_counter() - t0
+            logger.info("─" * 56)
+            logger.info("  Startup complete (%.2fs)", elapsed)
+            logger.info("─" * 56)
+            yield
+
+
+            # if semantic_cache:
+            #     try:
+            #         deleted = semantic_cache.cleanup_expired()
+            #         logger.info("  [ OK ] Semantic cache: cleaned %d expired entries", deleted)
+            #     except Exception as e:
+            #         logger.warning("  [FAIL] Semantic cache cleanup error: %s", e)
+            # if checkpointer_pool:
+            #     try:
+            #         await checkpointer_pool.close()
+            #         logger.info("  [ OK ] Checkpointer pool closed")
+            #     except Exception as e:
+            #         logger.warning("  [FAIL] Error closing checkpointer pool: %s", e)
+    except Exception as e:
+        logger.error("  [FAIL] Redis/connection error: %s", e)
+        raise
 
     # Shutdown
     logger.info("─" * 56)
     logger.info("  Shutdown")
     logger.info("─" * 56)
-    # if semantic_cache:
-    #     try:
-    #         deleted = semantic_cache.cleanup_expired()
-    #         logger.info("  [ OK ] Semantic cache: cleaned %d expired entries", deleted)
-    #     except Exception as e:
-    #         logger.warning("  [FAIL] Semantic cache cleanup error: %s", e)
-    # if checkpointer_pool:
-    #     try:
-    #         await checkpointer_pool.close()
-    #         logger.info("  [ OK ] Checkpointer pool closed")
-    #     except Exception as e:
-    #         logger.warning("  [FAIL] Error closing checkpointer pool: %s", e)
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────
