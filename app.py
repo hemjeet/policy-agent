@@ -241,12 +241,12 @@ async def chat(req: ChatRequest):
         t_invoke = time.perf_counter()
         result = await graph.ainvoke({"messages": [input_msg]}, config)
         logger.info("TIMING thread=%s ainvoke=%.2fs", thread_id[:8], time.perf_counter() - t_invoke)
-    except Exception as e:
+    except Exception:
         logger.exception("Chat graph error")
         raise HTTPException(500, detail="Internal error")
 
     last_msg = result.get("messages")[-1]
-    
+
     if isinstance(last_msg, AIMessage):
         resp = last_msg.content
     else:
@@ -268,7 +268,7 @@ async def chat_stream(req: ChatRequest):
                 {"messages": [input_msg]}, config, stream_mode="messages"
             ):
                 if (
-                    isinstance(msg_chunk, (AIMessageChunk, AIMessage)) 
+                    isinstance(msg_chunk, (AIMessageChunk, AIMessage))
                     and msg_chunk.content
                     and metadata.get("langgraph_node") == "llm_call"
                 ):
@@ -293,4 +293,4 @@ gr.mount_gradio_app(app, demo, path="/ui")
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
-    
+

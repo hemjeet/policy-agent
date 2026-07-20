@@ -2,7 +2,6 @@
 Unit tests for the router prompt and intent classification logic.
 """
 
-import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from langchain_core.messages import AIMessage, HumanMessage

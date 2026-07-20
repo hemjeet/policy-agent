@@ -4,19 +4,16 @@ import json
 import logging
 import re
 from langchain_core.messages import (
-    AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage,
-    filter_messages, trim_messages,
+    AIMessage, HumanMessage, SystemMessage,
 )
-from langchain_core.runnables.config import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt.tool_node import ToolNode
-from langgraph.types import interrupt, Command, RetryPolicy
+from langgraph.types import RetryPolicy
 import httpx
 from .config import SYSTEM_PROMPT, TOOLS, KB_TOOL, ROUTER_PROMPT
 from .state import PolicyAgentState
 from .semantic_cache import SemanticCache
-import tiktoken
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +47,7 @@ class PolicyAgent:
             if isinstance(msg, HumanMessage):
                 last_human_message = msg
                 break
-        
+
         if not last_human_message:
             return "TRANSACTIONAL"  # default fallback
 
@@ -64,12 +61,12 @@ class PolicyAgent:
             response = await self.router_llm.ainvoke(
                 router_messages, config= {"callbacks": []}
             )
-            
+
             content = response.content.strip()
             # Clean Markdown code blocks if the LLM outputted them
             if content.startswith("```"):
                 content = re.sub(r"^```(?:json)?\n|```$", "", content, flags=re.IGNORECASE).strip()
-            
+
             data = json.loads(content)
             intent = data.get("intent", "TRANSACTIONAL").upper()
             if "KNOWLEDGE" in intent:
@@ -78,7 +75,7 @@ class PolicyAgent:
         except Exception as e:
             logger.warning(f"Failed to run router LLM: {e}. Defaulting to TRANSACTIONAL.")
             return "TRANSACTIONAL"
-        
+
 
     async def _llm_call(self, state: PolicyAgentState):
         messages = state['messages']
@@ -142,7 +139,7 @@ class PolicyAgent:
                     break
 
         return END
-        
+
 
     def _build_graph(self):
         retry_exceptions = (
@@ -157,7 +154,7 @@ class PolicyAgent:
         workflow.add_node('llm_call', self._llm_call, retry_policy=RetryPolicy(
             max_attempts=3,
             retry_on=lambda e: isinstance(e, retry_exceptions),
-            
+
         ))
         workflow.add_node('kb_tools', ToolNode(KB_TOOL))
         workflow.add_node('tools', ToolNode(TOOLS))
@@ -165,7 +162,7 @@ class PolicyAgent:
         workflow.add_edge(START, 'llm_call')
 
         workflow.add_conditional_edges(
-            'llm_call', 
+            'llm_call',
             self._should_continue,
             {
                 'tools': 'tools',
@@ -179,12 +176,11 @@ class PolicyAgent:
 
         return workflow.compile(checkpointer=MemorySaver())
 
-        
 
 
-            
 
 
-        
 
-        
+
+
+

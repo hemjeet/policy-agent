@@ -3,8 +3,6 @@ Unit tests for Pydantic schemas, agent state, and tool output models.
 """
 
 import json
-import pytest
-from pydantic import ValidationError
 
 from agent.state import PolicyAgentState
 from tools.check_claim_status import ClaimStatusOutput, ClaimDetail, ClaimStatusEntry

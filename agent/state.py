@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional, Annotated
+from typing import TypedDict, Annotated
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
@@ -14,4 +14,3 @@ class PolicyAgentState(TypedDict):
     intent: str
     cached_hit: bool
 
-    

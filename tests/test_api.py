@@ -5,10 +5,6 @@ These tests use mocked dependencies (LLM, DB, Redis) so they run
 in CI without real credentials or infrastructure.
 """
 
-import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi.testclient import TestClient
 
 
 # ---------------------------------------------------------------------------

@@ -8,16 +8,14 @@ from langchain_core.messages import (
     AIMessage, HumanMessage, SystemMessage, filter_messages, trim_messages, BaseMessage
 )
 from langchain_core.outputs import Generation
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt.tool_node import ToolNode
 from langchain_redis import RedisSemanticCache
 from langchain_openai import OpenAIEmbeddings
-from langgraph.checkpoint.redis.aio import AsyncRedisSaver 
 import tiktoken
 from .config import (
     SYSTEM_PROMPT, TOOLS, KB_TOOL, ROUTER_PROMPT,
-    REDIS_URL, KB_CACHE_THRESHOLD, KB_CACHE_TTL,
+    REDIS_URL, KB_CACHE_TTL,
 )
 from .state import PolicyAgentState
 
@@ -155,7 +153,7 @@ class PolicyAgentV2:
         logger.info("LLM call | intent=%s | tools=%s | msg_count=%d",
                     intent, [t.name for t in tool_mode], len(messages))
         trimmed = _trim_context(messages)
-        
+
         response = await llm_with_tools.ainvoke(
             [SystemMessage(content=SYSTEM_PROMPT), *trimmed]
         )
