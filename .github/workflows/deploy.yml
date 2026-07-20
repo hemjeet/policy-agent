@@ -43,11 +43,43 @@ jobs:
           docker push $URI:latest
 
   # ──────────────────────────────────────────────
-  # Job 2: Deploy to Staging EC2
+  # Job 2: Lint & Test
+  # ──────────────────────────────────────────────
+  test:
+    name: Lint & Test
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio ruff
+
+      - name: Lint with Ruff
+        run: ruff check . --output-format=github
+
+      - name: Run tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTGRES_URI: ${{ secrets.POSTGRES_URI }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+        run: pytest tests/ -v --tb=short
+
+  # ──────────────────────────────────────────────
+  # Job 3: Deploy to Staging EC2
   # ──────────────────────────────────────────────
   deploy-staging:
     name: Deploy to Staging
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -67,9 +99,10 @@ jobs:
 
             IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ needs.build.outputs.image_tag }}
 
-            # Stop old container
+            # Stop old container and clean up disk
             docker stop policy-agent 2>/dev/null || true
             docker rm policy-agent 2>/dev/null || true
+            docker system prune -af
 
             # Pull and run new image
             docker pull $IMAGE
@@ -123,9 +156,10 @@ jobs:
 
             IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ needs.build.outputs.image_tag }}
 
-            # Stop old container
+            # Stop old container and clean up disk
             docker stop policy-agent 2>/dev/null || true
             docker rm policy-agent 2>/dev/null || true
+            docker system prune -af
 
             # Pull and run new image
             docker pull $IMAGE
