@@ -201,6 +201,16 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         status_code=429,
         content={"detail": "Rate limit exceeded. Please try again later."},
     )
+# ── Health check ──────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy",
+        "components": {
+            "graph": app.state.graph is not None,
+            "vectorstore": app.state.vectorstore is not None,
+        },
+    }
 
 
 def _get_config(thread_id: str, vectorstore):
