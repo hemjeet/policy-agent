@@ -67,11 +67,11 @@ jobs:
 
       - name: Run tests
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          POSTGRES_URI: ${{ secrets.POSTGRES_URI }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
+          OPENAI_API_KEY: "dummy-key"
+          DEEPSEEK_API_KEY: "dummy-key"
+          DATABASE_URL: "postgresql://dummy:dummy@localhost:5432/dummy"
+          POSTGRES_URI: "postgresql://dummy:dummy@localhost:5432/dummy"
+          REDIS_URL: "redis://localhost:6379"
         run: pytest tests/ -v --tb=short
 
   # ──────────────────────────────────────────────
