@@ -80,18 +80,22 @@ jobs:
               -p 8000:8000 \
               $IMAGE
 
-            # Wait for health check
-            echo "Waiting for health check..."
-            for i in $(seq 1 10); do
+            # Wait for app to boot (DB connections, LLM init, etc.)
+            echo "Waiting 30s for app to start..."
+            sleep 30
+
+            # Health check with retries
+            echo "Running health checks..."
+            for i in $(seq 1 15); do
               if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
                 echo "✅ Staging is healthy!"
                 exit 0
               fi
-              echo "  Attempt $i/10..."
-              sleep 5
+              echo "  Attempt $i/15..."
+              sleep 10
             done
             echo "❌ Health check failed"
-            docker logs policy-agent
+            docker logs policy-agent --tail 50
             exit 1
 
   # ──────────────────────────────────────────────
@@ -132,16 +136,20 @@ jobs:
               -p 8000:8000 \
               $IMAGE
 
-            # Wait for health check
-            echo "Waiting for health check..."
-            for i in $(seq 1 10); do
+            # Wait for app to boot (DB connections, LLM init, etc.)
+            echo "Waiting 30s for app to start..."
+            sleep 30
+
+            # Health check with retries
+            echo "Running health checks..."
+            for i in $(seq 1 15); do
               if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
                 echo "✅ Production is healthy!"
                 exit 0
               fi
-              echo "  Attempt $i/10..."
-              sleep 5
+              echo "  Attempt $i/15..."
+              sleep 10
             done
             echo "❌ Health check failed"
-            docker logs policy-agent
+            docker logs policy-agent --tail 50
             exit 1
