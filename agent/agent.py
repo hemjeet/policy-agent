@@ -107,11 +107,12 @@ class PolicyAgent:
             tool_mode = TOOLS
 
         llm_with_tools = self.llm.bind_tools(tool_mode)
-        logger.info("LLM call | intent=%s | tools=%s | msg_count=%d",
-                    intent, [t.name for t in tool_mode], len(messages))
         response = await llm_with_tools.ainvoke(
             [SystemMessage(content=SYSTEM_PROMPT), *messages]
         )
+        model_used = response.response_metadata.get("model_name", "unknown")
+        logger.info("LLM call | intent=%s | model=%s | tools=%s | msg_count=%d",
+                    intent, model_used, [t.name for t in tool_mode], len(messages))
 
 
         if hasattr(response, 'tool_calls') and response.tool_calls:
