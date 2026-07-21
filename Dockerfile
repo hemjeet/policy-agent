@@ -41,6 +41,7 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
 COPY --chown=appuser:appuser . .
 
 RUN chown appuser:appuser /app
+
 # Switch to non-root user
 USER appuser
 
@@ -49,4 +50,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
 
-CMD ["uvicorn", "app_v2:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

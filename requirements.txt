@@ -1,5 +1,5 @@
 fastapi==0.116.0
-gradio==5.35.0
+gradio
 httpx==0.28.1
 langchain_community==0.4.2
 langchain_core==1.4.8
@@ -11,6 +11,7 @@ langchain_postgres==0.0.17
 langchain_text_splitters==1.1.2
 langgraph-checkpoint-redis==0.5.0
 langchain-redis
+langgraph-checkpoint-postgres
 langgraph==1.2.7
 locust
 openai==2.44.0

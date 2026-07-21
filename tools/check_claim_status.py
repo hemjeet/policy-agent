@@ -7,7 +7,7 @@ from typing import Optional, List
 from langchain_core.tools import tool
 
 from data.db import SessionLocal
-from data.models import Customer, Policy, Claim, ClaimStatusHistory
+from data.models import Customer, Policy, Claim
 from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
 logger = logging.getLogger(__name__)
 

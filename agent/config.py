@@ -106,22 +106,29 @@ Your job is to analyze the user's latest query and decide whether the question s
 
 Categorize the user's intent into one of the following two options:
 1. "KNOWLEDGE_BASE"
-Select this if the query is a general question about insurance concepts, rules, processes, how-tos, exclusions, or generic help.
+Select this if the query is a general question about insurance concepts, rules, processes, how-tos, exclusions, timelines, or generic help.
 Examples:
 - "How do I file a claim?"
 - "What is a No Claim Bonus?"
 - "Is health insurance premium tax deductible?"
 - "What is not covered under health insurance?"
 - "How do I port my health insurance?"
+- "How long does claim approval take?"
+- "What is the claim approval process?"
+- "How long will it take to approve the claim?"
+- "What documents are needed for claim settlement?"
 
 2. "TRANSACTIONAL"
 Select this if the query is about a specific customer, policy, claim status, or account transaction.
+IMPORTANT: If the user does not provide a specific claim number, policy number, phone number, or email, it is likely a general question and should be KNOWLEDGE_BASE.
 Examples:
 - "What is the status of my claim CLM-2024-0001?"
-- "Can you check my claim status?"
+- "Can you check my claim status?" (user wants to look up their own claim)
 - "Show me my policies."
 - "I registered with phone number +91-9876543210. Do I have any pending claims?"
 - "Is policy POL-HLT-2024-001 active?"
+
+**Important:** If the query asks about general processes or timelines without providing a claim ID, phone number, or policy number, classify it as KNOWLEDGE_BASE — even if it uses "the claim" or "my claim". The phrase "the claim" does NOT automatically make it transactional; only specific identifiers or explicit requests to look up a user's own data make it transactional.
 
 Respond ONLY with a JSON object containing:
 - "intent": either "KNOWLEDGE_BASE" or "TRANSACTIONAL"

@@ -2,7 +2,6 @@ import os
 import uuid
 import json
 import logging
-import sys
 import time
 
 from contextlib import asynccontextmanager
@@ -14,21 +13,19 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, AIMessageChunk, AIMessage
-from langgraph.types import Command
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.checkpoint.postgres import dict_row
-from psycopg_pool import AsyncConnectionPool
+
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
-from langchain_google_genai import ChatGoogleGenerativeAI
 from slowapi.errors import RateLimitExceeded
 
 from agent import PolicyAgent
 import gradio as gr
+
+from agent.config import TOOLS
 from gradio_ui import create_demo
 
 
@@ -121,45 +118,59 @@ async def lifespan(app: FastAPI):
     # 1. LLM
     llm, router_llm = _build_llm()
 
-    # 2. Vectorstore
+    # 2. vectorstore
     vectorstore = _init_vectorstore(postgres_uri, embeddings) if postgres_uri else None
     if not postgres_uri:
         logger.warning("  [SKIP] POSTGRES_URI not set - vectorstore disabled")
 
 
     # 6. Agent graph
-    agent = PolicyAgent(llm=llm, router_llm= router_llm)
-    graph = agent.graph
-    logger.info("  [ OK ] Agent graph compiled")
+    try:
+        async with AsyncPostgresSaver.from_conn_string(postgres_uri) as checkpointer:
+            await checkpointer.setup()
 
-    # Store on app.state
-    app.state.graph = graph
-    app.state.vectorstore = vectorstore
-    # app.state.checkpointer_pool = checkpointer_pool
-    # app.state.semantic_cache = semantic_cache
+            agent = PolicyAgent(
+                llm= llm,
+                router_llm= router_llm,
+                checkpointer = checkpointer,
+                tools = TOOLS
+            )
+            graph = agent.graph
+            logger.info("  [ OK ] Agent graph compiled")
 
-    elapsed = time.perf_counter() - t0
-    logger.info("─" * 56)
-    logger.info("  Startup complete (%.2fs)", elapsed)
-    logger.info("─" * 56)
-    yield
+            # Store on app.state
+            app.state.graph = graph
+            app.state.vectorstore = vectorstore
+            # app.state.checkpointer_pool = checkpointer_pool
+            # app.state.semantic_cache = semantic_cache
+
+            elapsed = time.perf_counter() - t0
+            logger.info("─" * 56)
+            logger.info("  Startup complete (%.2fs)", elapsed)
+            logger.info("─" * 56)
+            yield
+
+
+            # if semantic_cache:
+            #     try:
+            #         deleted = semantic_cache.cleanup_expired()
+            #         logger.info("  [ OK ] Semantic cache: cleaned %d expired entries", deleted)
+            #     except Exception as e:
+            #         logger.warning("  [FAIL] Semantic cache cleanup error: %s", e)
+            # if checkpointer_pool:
+            #     try:
+            #         await checkpointer_pool.close()
+            #         logger.info("  [ OK ] Checkpointer pool closed")
+            #     except Exception as e:
+            #         logger.warning("  [FAIL] Error closing checkpointer pool: %s", e)
+    except Exception as e:
+        logger.error("  [FAIL] Redis/connection error: %s", e)
+        raise
 
     # Shutdown
     logger.info("─" * 56)
     logger.info("  Shutdown")
     logger.info("─" * 56)
-    # if semantic_cache:
-    #     try:
-    #         deleted = semantic_cache.cleanup_expired()
-    #         logger.info("  [ OK ] Semantic cache: cleaned %d expired entries", deleted)
-    #     except Exception as e:
-    #         logger.warning("  [FAIL] Semantic cache cleanup error: %s", e)
-    # if checkpointer_pool:
-    #     try:
-    #         await checkpointer_pool.close()
-    #         logger.info("  [ OK ] Checkpointer pool closed")
-    #     except Exception as e:
-    #         logger.warning("  [FAIL] Error closing checkpointer pool: %s", e)
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────
@@ -190,6 +201,16 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         status_code=429,
         content={"detail": "Rate limit exceeded. Please try again later."},
     )
+# ── Health check ──────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy",
+        "components": {
+            "graph": app.state.graph is not None,
+            "vectorstore": app.state.vectorstore is not None,
+        },
+    }
 
 
 def _get_config(thread_id: str, vectorstore):
@@ -220,12 +241,12 @@ async def chat(req: ChatRequest):
         t_invoke = time.perf_counter()
         result = await graph.ainvoke({"messages": [input_msg]}, config)
         logger.info("TIMING thread=%s ainvoke=%.2fs", thread_id[:8], time.perf_counter() - t_invoke)
-    except Exception as e:
+    except Exception:
         logger.exception("Chat graph error")
         raise HTTPException(500, detail="Internal error")
 
     last_msg = result.get("messages")[-1]
-    
+
     if isinstance(last_msg, AIMessage):
         resp = last_msg.content
     else:
@@ -247,7 +268,7 @@ async def chat_stream(req: ChatRequest):
                 {"messages": [input_msg]}, config, stream_mode="messages"
             ):
                 if (
-                    isinstance(msg_chunk, (AIMessageChunk, AIMessage)) 
+                    isinstance(msg_chunk, (AIMessageChunk, AIMessage))
                     and msg_chunk.content
                     and metadata.get("langgraph_node") == "llm_call"
                 ):
@@ -272,4 +293,4 @@ gr.mount_gradio_app(app, demo, path="/ui")
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
-    
+

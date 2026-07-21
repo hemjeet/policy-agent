@@ -63,7 +63,6 @@ def _build_llm():
     fallback = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
     router = ChatOpenAI(
         model=os.getenv("ROUTER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
-        cache=True,
     )
     llm = primary.with_fallbacks([fallback])
     logger.info("  [ OK ] DeepSeek LLM loaded (%s)", os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"))
@@ -297,4 +296,4 @@ gr.mount_gradio_app(app, demo, path="/ui")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app_v2:app", host="0.0.0.0", port=8000, reload=True)

@@ -5,7 +5,6 @@ Stores query-embedding -> response pairs in Supabase PostgreSQL.
 import os
 import logging
 from openai import OpenAI
-from sqlalchemy import func
 from data.db import SessionLocal
 from data.models import KnowledgeBaseCache
 

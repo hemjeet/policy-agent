@@ -4,45 +4,42 @@ import json
 import logging
 import re
 from langchain_core.messages import (
-    AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage,
-    filter_messages, trim_messages,
+    AIMessage, HumanMessage, SystemMessage,
 )
-from langchain_core.runnables.config import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt.tool_node import ToolNode
-from langgraph.types import interrupt, Command, RetryPolicy
+from langgraph.types import RetryPolicy
 import httpx
 from .config import SYSTEM_PROMPT, TOOLS, KB_TOOL, ROUTER_PROMPT
 from .state import PolicyAgentState
 from .semantic_cache import SemanticCache
-import tiktoken
 
 logger = logging.getLogger(__name__)
 
 
+def _force_stop(iteration_count: int) -> dict | None:
+    if iteration_count > int(os.getenv("MAX_ITERATIONS", "5")):
+        return {
+            'messages': [
+                AIMessage(
+                    content="I'm having trouble completing this request. "
+                        "Let me connect you with a support agent."
+                )
+            ],
+            'iteration_count': iteration_count,
+        }
+
+    return None
+
+
 class PolicyAgent:
-    def __init__(self, router_llm, llm):
+    def __init__(self, router_llm, llm, checkpointer, tools):
         self.router_llm = router_llm
         self.llm = llm
         self.cache = SemanticCache()
         self.graph = self._build_graph()
-    
 
-    def _force_stop(self, iteration_count: int) -> dict | None:
-        if iteration_count > int(os.getenv("MAX_ITERATIONS", "5")):
-            return {
-                'messages': [
-                    AIMessage(
-                        content="I'm having trouble completing this request. "
-                            "Let me connect you with a support agent."
-                    )
-                ],
-                'iteration_count': iteration_count,
-            }
-        
-        return None
-    
     async def _router_llm(self, state: PolicyAgentState) -> str:
         messages = state['messages']
         last_human_message = None
@@ -50,7 +47,7 @@ class PolicyAgent:
             if isinstance(msg, HumanMessage):
                 last_human_message = msg
                 break
-        
+
         if not last_human_message:
             return "TRANSACTIONAL"  # default fallback
 
@@ -59,18 +56,17 @@ class PolicyAgent:
                 SystemMessage(content=ROUTER_PROMPT),
                 HumanMessage(content=f"Classify this query: {last_human_message.content}")
             ]
-            # Empty callbacks → prevents router tokens from leaking into
-            # the message stream (stream_mode="messages" captures all LLM
+
             # calls within a node by default).
             response = await self.router_llm.ainvoke(
-                router_messages, config={"callbacks": []}
+                router_messages, config= {"callbacks": []}
             )
-            
+
             content = response.content.strip()
-            # Clean markdown code blocks if the LLM outputted them
+            # Clean Markdown code blocks if the LLM outputted them
             if content.startswith("```"):
                 content = re.sub(r"^```(?:json)?\n|```$", "", content, flags=re.IGNORECASE).strip()
-            
+
             data = json.loads(content)
             intent = data.get("intent", "TRANSACTIONAL").upper()
             if "KNOWLEDGE" in intent:
@@ -79,7 +75,7 @@ class PolicyAgent:
         except Exception as e:
             logger.warning(f"Failed to run router LLM: {e}. Defaulting to TRANSACTIONAL.")
             return "TRANSACTIONAL"
-        
+
 
     async def _llm_call(self, state: PolicyAgentState):
         messages = state['messages']
@@ -96,11 +92,12 @@ class PolicyAgent:
                     updates['iteration_count'] = iteration_count
                     updates['cached_hit'] = True
                     return updates
+
         else:
             iteration_count = state.get('iteration_count', 0) + 1
             intent = state.get('intent', 'TRANSACTIONAL')
 
-        force_stop = self._force_stop(iteration_count)
+        force_stop = _force_stop(iteration_count)
         if force_stop:
             return force_stop
 
@@ -110,11 +107,13 @@ class PolicyAgent:
             tool_mode = TOOLS
 
         llm_with_tools = self.llm.bind_tools(tool_mode)
-        logger.info("LLM call | intent=%s | tools=%s | msg_count=%d",
-                    intent, [t.name for t in tool_mode], len(messages))
         response = await llm_with_tools.ainvoke(
             [SystemMessage(content=SYSTEM_PROMPT), *messages]
         )
+        model_used = response.response_metadata.get("model_name", "unknown")
+        logger.info("LLM call | intent=%s | model=%s | tools=%s | msg_count=%d",
+                    intent, model_used, [t.name for t in tool_mode], len(messages))
+
 
         if hasattr(response, 'tool_calls') and response.tool_calls:
             logger.info("LLM wants tools: %s", [tc['name'] for tc in response.tool_calls])
@@ -135,14 +134,14 @@ class PolicyAgent:
                 return 'kb_tools'
             return 'tools'
 
-        if state.get('intent') == 'KNOWLEDGE_BASE' and isinstance(last_msg, AIMessage) and not state.get('cached_hit'):
+        if state.get('intent') == 'KNOWLEDGE_BASE' and isinstance(last_msg, AIMessage):
             for msg in reversed(state['messages']):
                 if isinstance(msg, HumanMessage):
                     await asyncio.to_thread(self.cache.store, msg.content, last_msg.content)
                     break
 
         return END
-        
+
 
     def _build_graph(self):
         retry_exceptions = (
@@ -157,7 +156,7 @@ class PolicyAgent:
         workflow.add_node('llm_call', self._llm_call, retry_policy=RetryPolicy(
             max_attempts=3,
             retry_on=lambda e: isinstance(e, retry_exceptions),
-            
+
         ))
         workflow.add_node('kb_tools', ToolNode(KB_TOOL))
         workflow.add_node('tools', ToolNode(TOOLS))
@@ -165,7 +164,7 @@ class PolicyAgent:
         workflow.add_edge(START, 'llm_call')
 
         workflow.add_conditional_edges(
-            'llm_call', 
+            'llm_call',
             self._should_continue,
             {
                 'tools': 'tools',
@@ -179,12 +178,11 @@ class PolicyAgent:
 
         return workflow.compile(checkpointer=MemorySaver())
 
-        
 
 
-            
 
 
-        
 
-        
+
+
+
