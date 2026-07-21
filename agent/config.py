@@ -119,7 +119,7 @@ Examples:
 - "What documents are needed for claim settlement?"
 
 2. "TRANSACTIONAL"
-Select this if the query is about a specific customer, policy, claim status, or account transaction. 
+Select this if the query is about a specific customer, policy, claim status, or account transaction.
 IMPORTANT: If the user does not provide a specific claim number, policy number, phone number, or email, it is likely a general question and should be KNOWLEDGE_BASE.
 Examples:
 - "What is the status of my claim CLM-2024-0001?"
