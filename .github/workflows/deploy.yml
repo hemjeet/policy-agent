@@ -2,7 +2,7 @@ name: Build & Deploy to AWS EC2
 
 on:
   push:
-    branches: [policy-agent-v3]
+    branches: [policy-agent-v3, master, main]
 
 env:
   ECR_REPO: policy-agent
@@ -80,6 +80,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     needs: [build, test]
+    if: github.ref == 'refs/heads/policy-agent-v3'
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -136,7 +137,8 @@ jobs:
   # ──────────────────────────────────────────────
   deploy-production:
     name: Deploy to Production
-    needs: [build, deploy-staging]
+    needs: [build, test]
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:

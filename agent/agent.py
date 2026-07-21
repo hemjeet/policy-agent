@@ -92,6 +92,7 @@ class PolicyAgent:
                     updates['iteration_count'] = iteration_count
                     updates['cached_hit'] = True
                     return updates
+
         else:
             iteration_count = state.get('iteration_count', 0) + 1
             intent = state.get('intent', 'TRANSACTIONAL')
@@ -132,7 +133,7 @@ class PolicyAgent:
                 return 'kb_tools'
             return 'tools'
 
-        if state.get('intent') == 'KNOWLEDGE_BASE' and isinstance(last_msg, AIMessage) and not state.get('cached_hit'):
+        if state.get('intent') == 'KNOWLEDGE_BASE' and isinstance(last_msg, AIMessage):
             for msg in reversed(state['messages']):
                 if isinstance(msg, HumanMessage):
                     await asyncio.to_thread(self.cache.store, msg.content, last_msg.content)

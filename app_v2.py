@@ -63,7 +63,6 @@ def _build_llm():
     fallback = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
     router = ChatOpenAI(
         model=os.getenv("ROUTER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
-        cache=True,
     )
     llm = primary.with_fallbacks([fallback])
     logger.info("  [ OK ] DeepSeek LLM loaded (%s)", os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"))
