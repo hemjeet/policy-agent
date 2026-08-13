@@ -57,15 +57,15 @@ class TestChatEndpoint:
         data = response.json()
         assert data["thread_id"]  # Should be a non-empty UUID
 
-    def test_chat_accepts_empty_message(self, client, mock_graph):
-        """app.py doesn't enforce min_length — app_v2.py does."""
+    def test_chat_rejects_empty_message(self, client, mock_graph):
+        """Input validation now requires min_length=1."""
         response = client.post("/chat", json={"message": ""})
-        assert response.status_code == 200
+        assert response.status_code == 422
 
-    def test_chat_accepts_blank_message(self, client, mock_graph):
-        """app.py doesn't strip/reject blanks — app_v2.py does."""
+    def test_chat_rejects_blank_message(self, client, mock_graph):
+        """Input validation now strips and rejects blanks."""
         response = client.post("/chat", json={"message": "   "})
-        assert response.status_code == 200
+        assert response.status_code == 422
 
     def test_chat_rejects_missing_message(self, client):
         response = client.post("/chat", json={})
@@ -84,10 +84,10 @@ class TestChatStreamEndpoint:
         assert response.status_code == 200
         assert "text/event-stream" in response.headers["content-type"]
 
-    def test_stream_accepts_empty_message(self, client, mock_graph_stream):
-        """app.py doesn't enforce min_length on stream endpoint."""
+    def test_stream_rejects_empty_message(self, client, mock_graph_stream):
+        """Input validation now rejects empty messages on stream endpoint."""
         response = client.post("/chat/stream", json={"message": ""})
-        assert response.status_code == 200
+        assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------

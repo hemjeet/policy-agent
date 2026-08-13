@@ -19,17 +19,16 @@ class TestRouterClassification:
     @pytest.fixture
     def agent(self):
         """Create a PolicyAgent with mocked LLMs."""
+        from langgraph.checkpoint.memory import MemorySaver
         mock_llm = MagicMock()
         mock_router = AsyncMock()
-        mock_checkpointer = MagicMock()
+        mock_checkpointer = MemorySaver()
         with pytest.MonkeyPatch.context() as mp:
-            # Patch SemanticCache to avoid Redis dependency
             mp.setattr("agent.agent.SemanticCache", MagicMock)
             agent = PolicyAgent(
                 router_llm=mock_router,
                 llm=mock_llm,
                 checkpointer=mock_checkpointer,
-                tools=[],
             )
         agent.router_llm = mock_router
         return agent

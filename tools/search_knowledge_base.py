@@ -18,7 +18,7 @@ class KnowledgeBaseSearchResponse(BaseModel):
 
 @tool('search_knowledge_base')
 @retry_on_db_error()
-def search_knowledge_base(query: str, config: RunnableConfig, top_k: int = 5) -> str:
+async def search_knowledge_base(query: str, config: RunnableConfig, top_k: int = 5) -> str:
     """Search the insurance knowledge base using semantic similarity.
 
     Retrieves the most relevant document chunks for the user's question.
@@ -40,7 +40,7 @@ def search_knowledge_base(query: str, config: RunnableConfig, top_k: int = 5) ->
         logger.info("KB search vs_collection=%s vs_type=%s",
                     getattr(vectorstore, 'collection_name', '?'),
                     type(vectorstore).__name__)
-        results = vectorstore.similarity_search(query, k=top_k)
+        results = await vectorstore.asimilarity_search(query, k=top_k)
         logger.info("KB search query='%s' returned %d chunks", query[:80], len(results))
 
         if not results:
