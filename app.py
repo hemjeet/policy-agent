@@ -23,8 +23,6 @@ from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, AIMessageChunk, AIMessage
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langchain_postgres.v2.async_vectorstore import AsyncPGVectorStore
-from langchain_postgres.v2.engine import PGEngine
 from langgraph.checkpoint.memory import MemorySaver
 
 from slowapi import Limiter
@@ -90,7 +88,9 @@ def _build_llm():
         model="claude-haiku-4-5-20251001",
         api_key=os.getenv("CLAUDE_API_KEY"),
     )
-    # router = ChatOpenAI(model=os.getenv("ROUTER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))).with_fallbacks([fallback_router])
+    # router = ChatOpenAI(
+    #     model=os.getenv("ROUTER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+    # ).with_fallbacks([fallback_router])
     llm = primary.with_fallbacks([fallback])
     logger.info("  [ OK ] OpenAI fallback loaded (%s)", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
     logger.info("  [ OK ] Router LLM loaded (%s)", os.getenv("ROUTER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")))
