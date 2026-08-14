@@ -12,7 +12,6 @@ from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.types import RetryPolicy
 import httpx
 import tiktoken
-from tenacity import retry_if_exception
 
 from .config import SYSTEM_PROMPT, TOOLS, KB_TOOL, ROUTER_PROMPT
 from .state import PolicyAgentState
