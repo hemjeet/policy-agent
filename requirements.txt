@@ -1,3 +1,4 @@
+arize-otel==0.13.0
 fastapi==0.116.0
 gradio
 httpx==0.28.1
@@ -15,6 +16,7 @@ langgraph-checkpoint-postgres
 langgraph==1.2.7
 locust
 openai==2.44.0
+openinference-instrumentation-langchain==0.1.70
 pgvector==0.3.6
 psycopg2-binary
 psycopg_pool==3.3.1

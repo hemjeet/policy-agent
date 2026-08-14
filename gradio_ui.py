@@ -103,6 +103,7 @@ def create_demo(api_base: str = "http://localhost:8000"):
     with gr.Blocks(
         title="SecureLife Insurance — Policy Agent",
         css=CUSTOM_CSS,
+        theme=gr.themes.Soft(primary_hue="blue"),
     ) as demo:
         thread_state = gr.State(None)
 
@@ -123,7 +124,8 @@ def create_demo(api_base: str = "http://localhost:8000"):
             "&bull; &nbsp;<em>Is my health insurance premium tax deductible?</em><br>"
             "&bull; &nbsp;<em>What documents do I need for a motor claim?</em>",
             height=520,
-            buttons=["copy"],
+            type="messages",
+            show_copy_button=True,
         )
 
         with gr.Row():
@@ -165,6 +167,4 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         share=False,
-        css=CUSTOM_CSS,
-        theme=gr.themes.Soft(primary_hue="blue"),
     )
