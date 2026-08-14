@@ -2,6 +2,7 @@
 Unit tests for Pydantic schemas, agent state, and tool output models.
 """
 
+import pytest
 import json
 
 from agent.state import PolicyAgentState
@@ -27,11 +28,12 @@ class TestChatRequestSchema:
         req = ChatRequest(message="Hello", thread_id="abc-123")
         assert req.thread_id == "abc-123"
 
-    def test_empty_message_accepted(self):
-        """app.py's ChatRequest has no min_length validator."""
+    def test_empty_message_rejected(self):
+        """ChatRequest now requires min_length=1."""
+        from pydantic import ValidationError
         from app import ChatRequest
-        req = ChatRequest(message="")
-        assert req.message == ""
+        with pytest.raises(ValidationError):
+            ChatRequest(message="")
 
 
 # ---------------------------------------------------------------------------

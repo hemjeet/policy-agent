@@ -4,9 +4,6 @@ line-length = 120
 
 # Exclude old/experimental files from linting
 exclude = [
-    "agno_agent.py",
-    "agno_agent_v2.py",
-    "agno_agent_v3.py",
     "test_workflow.py",
     "test.ipynb",
     "locustfile.py",
