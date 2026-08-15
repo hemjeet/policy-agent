@@ -107,13 +107,44 @@ Respond ONLY with valid JSON in this exact structure:
 """
 
 
+def _parse_judge_json(content: str) -> Optional[Dict[str, Any]]:
+    """Parse the judge's JSON output, tolerating markdown fences and stray text."""
+    cleaned = (content or "").strip()
+    if not cleaned:
+        return None
+
+    # Strip markdown code fences if present
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: extract the first JSON object block
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 async def evaluate_rag_response_with_judge(
     judge_llm,
     query: str,
     context: str,
     response: str
-) -> Dict[str, Any]:
-    """Use an LLM judge to evaluate RAG response groundedness and relevance."""
+) -> Optional[Dict[str, Any]]:
+    """Use an independent LLM judge to score RAG groundedness and relevance.
+
+    Returns a dict of scores on success, or None if the judge could not
+    produce valid JSON (callers must handle None explicitly rather than
+    silently substituting a default score).
+    """
     prompt = JUDGE_PROMPT.format(
         query=query,
         context=context or "No context provided",
@@ -123,14 +154,10 @@ async def evaluate_rag_response_with_judge(
     try:
         messages = [HumanMessage(content=prompt)]
         result = await judge_llm.ainvoke(messages)
-        content = result.content.strip()
-
-        # Clean JSON markdown blocks if any
-        if content.startswith("```"):
-            content = re.sub(r"^```(?:json)?\s*", "", content)
-            content = re.sub(r"\s*```$", "", content)
-
-        scores = json.loads(content)
+        scores = _parse_judge_json(result.content)
+        if scores is None:
+            logger.warning("LLM Judge returned invalid JSON for query=%r", query[:80])
+            return None
         return {
             "groundedness": float(scores.get("groundedness", 0)),
             "relevance": float(scores.get("relevance", 0)),
@@ -139,12 +166,7 @@ async def evaluate_rag_response_with_judge(
         }
     except Exception as e:
         logger.warning("LLM Judge evaluation failed: %s", e)
-        return {
-            "groundedness": 3.0,
-            "relevance": 3.0,
-            "professionalism": 3.0,
-            "reason": f"Evaluator fallback due to error: {str(e)}"
-        }
+        return None
 
 
 # ── 4. Key Points Coverage (Deterministic) ──────────────────────────────

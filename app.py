@@ -18,9 +18,6 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
-from langchain_deepseek import ChatDeepSeek
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, AIMessageChunk, AIMessage
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -31,6 +28,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from agent import PolicyAgent
+from agent.runtime import build_llm, build_embeddings, build_vectorstore
 import gradio as gr
 
 from gradio_ui import create_demo
@@ -75,59 +73,6 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials | None = Depe
     return credentials
 
 
-# ── Shared LLM builder (DeepSeek + OpenAI fallback) ────────────────────
-def _build_llm():
-    primary = ChatDeepSeek(
-        model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-    )
-    logger.info("  [ OK ] DeepSeek LLM loaded (%s)", os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"))
-
-    fallback = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    router = ChatAnthropic(
-        model="claude-haiku-4-5-20251001",
-        api_key=os.getenv("CLAUDE_API_KEY"),
-    )
-    # router = ChatOpenAI(
-    #     model=os.getenv("ROUTER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    # ).with_fallbacks([fallback_router])
-    llm = primary.with_fallbacks([fallback])
-    logger.info("  [ OK ] OpenAI fallback loaded (%s)", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    logger.info("  [ OK ] Router LLM loaded (%s)", os.getenv("ROUTER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")))
-    return llm, router
-
-
-# ── Lifespan init helpers ──────────────────────────────────────────────
-def _init_vectorstore(postgres_uri: str, embeddings: OpenAIEmbeddings):
-    from langchain_postgres import PGVector
-
-    try:
-        vs = PGVector(
-            embeddings=embeddings,
-            collection_name="knowledge_base",
-            connection=postgres_uri,
-            use_jsonb=True,
-        )
-        logger.info("  [ OK ] vectorstore (PGVector) connected")
-        return vs
-    except Exception as e:
-        logger.warning("  [FAIL] vectorstore connection failed: %s", e)
-        return None
-
-# async def _init_vectorstore(postgres_uri: str, embeddings: OpenAIEmbeddings):
-#     try:
-#         pg_engine = PGEngine.from_connection_string(postgres_uri)
-#         vs = await AsyncPGVectorStore.create(
-#             engine=pg_engine,
-#             embedding_service=embeddings,
-#             table_name="langchain_pg_embedding",
-#         )
-#         logger.info("  [ OK ] vectorstore (AsyncPGVectorStore) connected")
-#         return vs
-#     except Exception as e:
-#         logger.warning("  [FAIL] vectorstore connection failed: %s", e)
-#         return None
-
 # ── Pydantic schemas ──────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str = Field(
@@ -164,16 +109,16 @@ async def lifespan(app: FastAPI):
     logger.info("─" * 56)
 
     postgres_uri = os.getenv("POSTGRES_URI")
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    embeddings = build_embeddings()
 
     # 1. LLM
-    llm, router_llm = _build_llm()
+    llm, router_llm = build_llm()
 
     # 2. Arize tracing
     _tracer_provider = setup_tracing()
 
     # 3. vectorstore
-    vectorstore = _init_vectorstore(postgres_uri, embeddings) if postgres_uri else None
+    vectorstore = build_vectorstore(postgres_uri, embeddings) if postgres_uri else None
     if not postgres_uri:
         logger.warning("  [SKIP] POSTGRES_URI not set - vectorstore disabled")
 

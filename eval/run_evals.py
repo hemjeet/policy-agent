@@ -21,15 +21,14 @@ from datetime import datetime
 from typing import Dict, Any
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 # Ensure root directory is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent.agent import PolicyAgent
-from app import _build_llm, _init_vectorstore
-from langchain_openai import OpenAIEmbeddings
+from agent.runtime import build_llm, build_embeddings, build_vectorstore, build_judge_llm
 
 from eval.dataset import (
     ROUTER_EVAL_DATASET,
@@ -50,7 +49,8 @@ logger = logging.getLogger("eval_runner")
 
 class PolicyAgentEvaluator:
     def __init__(self):
-        self.llm, self.router_llm = _build_llm()
+        self.llm, self.router_llm = build_llm()
+        self.judge_llm = build_judge_llm()
         self.checkpointer = MemorySaver()
         self.agent = PolicyAgent(
             router_llm=self.router_llm,
@@ -61,8 +61,8 @@ class PolicyAgentEvaluator:
 
         # Initialize vectorstore if possible
         postgres_uri = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL") or None
-        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-        self.vectorstore = _init_vectorstore(postgres_uri, embeddings) if postgres_uri else None
+        embeddings = build_embeddings()
+        self.vectorstore = build_vectorstore(postgres_uri, embeddings) if postgres_uri else None
 
     # ── 1. Evaluate Router ────────────────────────────────────────────────
     async def run_router_evals(self) -> Dict[str, Any]:
@@ -220,11 +220,15 @@ class PolicyAgentEvaluator:
                     {"messages": [HumanMessage(content=query)]},
                     config=config
                 )
-                for msg in res.get("messages", []):
-                    if isinstance(msg, AIMessage) and msg.content:
-                        final_response = str(msg.content)
-                    if getattr(msg, "type", "") == "tool" or msg.__class__.__name__ == "ToolMessage":
-                        retrieved_context += str(msg.content)
+                messages = res.get("messages", [])
+                # Final answer = the last AIMessage with content
+                answer_msgs = [m for m in messages if isinstance(m, AIMessage) and m.content]
+                if answer_msgs:
+                    final_response = str(answer_msgs[-1].content)
+                # Capture what the tools actually returned (for reporting only)
+                retrieved_context = "\n".join(
+                    str(m.content) for m in messages if isinstance(m, ToolMessage)
+                )
             except Exception as e:
                 logger.error("RAG eval error: %s", e)
 
@@ -235,13 +239,27 @@ class PolicyAgentEvaluator:
             cov_res = evaluate_key_points_coverage(final_response, expected_key_points)
             coverage_scores.append(cov_res["coverage_pct"])
 
-            # 2. LLM-as-a-Judge
+            # 2. LLM-as-a-Judge (independent judge; ground against reference context)
             judge_res = await evaluate_rag_response_with_judge(
-                self.llm,
+                self.judge_llm,
                 query=query,
-                context=retrieved_context or item.get("reference_context", ""),
+                context=item.get("reference_context", "") or retrieved_context,
                 response=final_response
             )
+            if judge_res is None:
+                logger.error("Judge failed for %s; skipping its scores", item["id"])
+                results.append({
+                    "id": item["id"],
+                    "query": query,
+                    "response": final_response[:200] + "...",
+                    "groundedness": None,
+                    "relevance": None,
+                    "coverage_pct": cov_res["coverage_pct"],
+                    "reason": "Judge failed to return valid JSON",
+                    "latency": round(dur, 2)
+                })
+                continue
+
             groundedness_scores.append(judge_res["groundedness"])
             relevance_scores.append(judge_res["relevance"])
 
@@ -293,6 +311,14 @@ async def main():
 
     total_duration = (datetime.now() - start_time).total_seconds()
 
+    # ── Quality gate thresholds (single source of truth) ─────────────────
+    router_min = float(os.getenv("EVAL_ROUTER_MIN_ACCURACY", "90.0"))
+    tool_min = float(os.getenv("EVAL_TOOL_MIN_ACCURACY", "85.0"))
+    args_min = float(os.getenv("EVAL_TOOL_ARGS_MIN_ACCURACY", "85.0"))
+    rag_ground_min = float(os.getenv("EVAL_RAG_MIN_GROUNDEDNESS", "3.8"))
+    rag_rel_min = float(os.getenv("EVAL_RAG_MIN_RELEVANCE", "3.8"))
+    rag_cov_min = float(os.getenv("EVAL_RAG_MIN_COVERAGE", "80.0"))
+
     summary_report = {
         "timestamp": datetime.now().isoformat(),
         "total_duration_seconds": round(total_duration, 2),
@@ -322,12 +348,12 @@ async def main():
 
     # Save Markdown Report
     md_path = "eval/reports/eval_report.md"
-    r_stat = '✅ Pass' if router_metrics['accuracy'] >= 90 else '⚠️ Needs Attention'
-    t_stat = '✅ Pass' if tool_metrics['tool_selection_accuracy'] >= 90 else '⚠️ Needs Attention'
-    a_stat = '✅ Pass' if tool_metrics['argument_extraction_accuracy'] >= 85 else '⚠️ Needs Attention'
-    rg_stat = '✅ Pass' if rag_metrics['avg_groundedness'] >= 4.0 else '⚠️ Needs Attention'
-    rr_stat = '✅ Pass' if rag_metrics['avg_relevance'] >= 4.0 else '⚠️ Needs Attention'
-    c_stat = '✅ Pass' if rag_metrics['avg_keypoint_coverage'] >= 80 else '⚠️ Needs Attention'
+    r_stat = '✅ Pass' if router_metrics['accuracy'] >= router_min else '⚠️ Needs Attention'
+    t_stat = '✅ Pass' if tool_metrics['tool_selection_accuracy'] >= tool_min else '⚠️ Needs Attention'
+    a_stat = '✅ Pass' if tool_metrics['argument_extraction_accuracy'] >= args_min else '⚠️ Needs Attention'
+    rg_stat = '✅ Pass' if rag_metrics['avg_groundedness'] >= rag_ground_min else '⚠️ Needs Attention'
+    rr_stat = '✅ Pass' if rag_metrics['avg_relevance'] >= rag_rel_min else '⚠️ Needs Attention'
+    c_stat = '✅ Pass' if rag_metrics['avg_keypoint_coverage'] >= rag_cov_min else '⚠️ Needs Attention'
 
     md_content = f"""# 📊 Policy Agent Evaluation Report
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -335,12 +361,12 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 ## Summary Scorecard
 | Metric | Score | Target | Status |
 |--------|-------|--------|--------|
-| **Router Intent Accuracy** | {router_metrics['accuracy']}% | ≥ 90% | {r_stat} |
-| **Tool Selection Accuracy** | {tool_metrics['tool_selection_accuracy']}% | ≥ 90% | {t_stat} |
-| **Argument Extraction Accuracy** | {tool_metrics['argument_extraction_accuracy']}% | ≥ 85% | {a_stat} |
-| **RAG Groundedness** | {rag_metrics['avg_groundedness']} / 5.0 | ≥ 4.0 | {rg_stat} |
-| **RAG Answer Relevance** | {rag_metrics['avg_relevance']} / 5.0 | ≥ 4.0 | {rr_stat} |
-| **Keypoint Coverage** | {rag_metrics['avg_keypoint_coverage']}% | ≥ 80% | {c_stat} |
+| **Router Intent Accuracy** | {router_metrics['accuracy']}% | ≥ {router_min}% | {r_stat} |
+| **Tool Selection Accuracy** | {tool_metrics['tool_selection_accuracy']}% | ≥ {tool_min}% | {t_stat} |
+| **Argument Extraction Accuracy** | {tool_metrics['argument_extraction_accuracy']}% | ≥ {args_min}% | {a_stat} |
+| **RAG Groundedness** | {rag_metrics['avg_groundedness']} / 5.0 | ≥ {rag_ground_min} | {rg_stat} |
+| **RAG Answer Relevance** | {rag_metrics['avg_relevance']} / 5.0 | ≥ {rag_rel_min} | {rr_stat} |
+| **Keypoint Coverage** | {rag_metrics['avg_keypoint_coverage']}% | ≥ {rag_cov_min}% | {c_stat} |
 
 *Total evaluation time: {total_duration:.2f}s*
 """
@@ -363,20 +389,21 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     print("=" * 70)
 
     # ── Quality Gate Evaluation (Cut-offs) ──────────────────────────────
-    router_min = float(os.getenv("EVAL_ROUTER_MIN_ACCURACY", "90.0"))
-    tool_min = float(os.getenv("EVAL_TOOL_MIN_ACCURACY", "85.0"))
-    rag_ground_min = float(os.getenv("EVAL_RAG_MIN_GROUNDEDNESS", "3.8"))
-    rag_rel_min = float(os.getenv("EVAL_RAG_MIN_RELEVANCE", "3.8"))
-
     failures = []
     if router_metrics["accuracy"] < router_min:
         failures.append(f"Router Accuracy {router_metrics['accuracy']}% < required {router_min}%")
     if tool_metrics["tool_selection_accuracy"] < tool_min:
         failures.append(f"Tool Selection Accuracy {tool_metrics['tool_selection_accuracy']}% < required {tool_min}%")
+    if tool_metrics["argument_extraction_accuracy"] < args_min:
+        failures.append(
+            f"Argument Extraction {tool_metrics['argument_extraction_accuracy']}% < required {args_min}%"
+        )
     if rag_metrics["avg_groundedness"] < rag_ground_min:
         failures.append(f"RAG Groundedness {rag_metrics['avg_groundedness']} < required {rag_ground_min}")
     if rag_metrics["avg_relevance"] < rag_rel_min:
         failures.append(f"RAG Relevance {rag_metrics['avg_relevance']} < required {rag_rel_min}")
+    if rag_metrics["avg_keypoint_coverage"] < rag_cov_min:
+        failures.append(f"Keypoint Coverage {rag_metrics['avg_keypoint_coverage']}% < required {rag_cov_min}%")
 
     print("\n" + "=" * 70)
     print("                      🎯 QUALITY GATE STATUS")
