@@ -1,6 +1,6 @@
 arize-otel==0.13.0
 fastapi==0.116.0
-gradio
+gradio==5.35.0
 httpx==0.28.1
 langchain_community==0.4.2
 langchain_core==1.4.8
