@@ -49,6 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prune previous Docker build and image cache
+        run: docker system prune -af --volumes || true
+
       - name: Build local Docker image (NO ECR PUSH)
         run: docker build -t policy-agent:test .
 
@@ -65,6 +68,12 @@ jobs:
             -e EVAL_RAG_MIN_GROUNDEDNESS=3.8 \
             -e EVAL_RAG_MIN_RELEVANCE=3.8 \
             policy-agent:test python eval/run_evals.py
+
+      - name: Cleanup evaluation container and image
+        if: always()
+        run: |
+          docker rmi -f policy-agent:test || true
+          docker system prune -af --volumes || true
 
   # ──────────────────────────────────────────────
   # Job 3: Push Golden Image to ECR (PASS ONLY)
@@ -101,6 +110,10 @@ jobs:
           docker push $URI:$TAG
           docker push $URI:latest
 
+      - name: Cleanup runner Docker image cache
+        if: always()
+        run: docker system prune -af --volumes || true
+
   # ──────────────────────────────────────────────
   # Job 4: Deploy to Staging & Smoke Tests
   # ──────────────────────────────────────────────
@@ -130,7 +143,7 @@ jobs:
             # Stop old container and clean up disk
             docker stop policy-agent 2>/dev/null || true
             docker rm policy-agent 2>/dev/null || true
-            docker system prune -af
+            docker system prune -af --volumes
 
             # Pull and run new image
             docker pull $IMAGE
@@ -199,7 +212,7 @@ jobs:
             # Stop old container and clean up disk
             docker stop policy-agent 2>/dev/null || true
             docker rm policy-agent 2>/dev/null || true
-            docker system prune -af
+            docker system prune -af --volumes
 
             # Pull and run new image
             docker pull $IMAGE
