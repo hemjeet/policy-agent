@@ -60,7 +60,7 @@ class PolicyAgentEvaluator:
         self.graph = self.agent.graph
 
         # Initialize vectorstore if possible
-        postgres_uri = os.getenv("POSTGRES_URI", os.getenv("DATABASE_URL"))
+        postgres_uri = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL") or None
         embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
         self.vectorstore = _init_vectorstore(postgres_uri, embeddings) if postgres_uri else None
 
