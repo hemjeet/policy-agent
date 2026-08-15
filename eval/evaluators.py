@@ -42,6 +42,8 @@ def evaluate_tool_call(
         return {
             "tool_match": False,
             "args_match": False,
+            "actual_tools": [],
+            "expected_tool": expected_tool,
             "details": "No tools were called by the agent."
         }
 

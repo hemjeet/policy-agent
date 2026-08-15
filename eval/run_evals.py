@@ -165,7 +165,7 @@ class PolicyAgentEvaluator:
                 args_correct += 1
 
             status = "✅ PASS" if (eval_res["tool_match"] and eval_res["args_match"]) else "❌ FAIL"
-            tools_called = eval_res['actual_tools']
+            tools_called = eval_res.get("actual_tools", [])
             print(f"  [{item['id']}] {status} | Expected: {expected_tool} | Called: {tools_called} ({dur:.2f}s)")
 
             results.append({
@@ -173,9 +173,9 @@ class PolicyAgentEvaluator:
                 "query": query,
                 "expected_tool": expected_tool,
                 "expected_args": expected_args,
-                "actual_tools": eval_res["actual_tools"],
-                "tool_match": eval_res["tool_match"],
-                "args_match": eval_res["args_match"],
+                "actual_tools": tools_called,
+                "tool_match": eval_res.get("tool_match", False),
+                "args_match": eval_res.get("args_match", False),
                 "latency": round(dur, 2)
             })
 
