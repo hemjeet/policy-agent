@@ -43,10 +43,10 @@ jobs:
           docker push $URI:latest
 
   # ──────────────────────────────────────────────
-  # Job 2: Lint & Test
+  # Job 2: Lint & Unit Tests (Fast & Free)
   # ──────────────────────────────────────────────
   test:
-    name: Lint & Test
+    name: Lint & Unit Tests
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -65,7 +65,7 @@ jobs:
       - name: Lint with Ruff
         run: ruff check . --output-format=github
 
-      - name: Run tests
+      - name: Run unit tests
         env:
           OPENAI_API_KEY: "dummy-key"
           DEEPSEEK_API_KEY: "dummy-key"
@@ -73,6 +73,24 @@ jobs:
           POSTGRES_URI: "postgresql://dummy:dummy@localhost:5432/dummy"
           REDIS_URL: "redis://localhost:6379"
         run: pytest tests/ -v --tb=short
+
+  # ──────────────────────────────────────────────
+  # Job 3: Automated Agent Evaluation Quality Gate
+  # ──────────────────────────────────────────────
+  eval:
+    name: Model Quality & Groundedness Gate
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Run Automated Agent Evaluation Quality Gate
         env:
@@ -88,11 +106,11 @@ jobs:
         run: python eval/run_evals.py
 
   # ──────────────────────────────────────────────
-  # Job 3: Deploy to Staging EC2
+  # Job 4: Deploy to Staging EC2
   # ──────────────────────────────────────────────
   deploy-staging:
     name: Deploy to Staging
-    needs: [build, test]
+    needs: [build, test, eval]
     if: github.ref == 'refs/heads/policy-agent-v4'
     runs-on: ubuntu-latest
     environment: staging
@@ -150,7 +168,7 @@ jobs:
   # ──────────────────────────────────────────────
   deploy-production:
     name: Deploy to Production
-    needs: [build, test]
+    needs: [build, test, eval]
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production

@@ -18,7 +18,7 @@ import os
 import sys
 import time
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
@@ -28,7 +28,6 @@ from langgraph.checkpoint.memory import MemorySaver
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent.agent import PolicyAgent
-from agent.config import LLM_PROVIDER
 from app import _build_llm, _init_vectorstore
 from langchain_openai import OpenAIEmbeddings
 
@@ -138,7 +137,6 @@ class PolicyAgentEvaluator:
             }
 
             actual_tool_calls = []
-            final_response = ""
 
             try:
                 async for event in self.graph.astream(
@@ -154,8 +152,6 @@ class PolicyAgentEvaluator:
                                         "name": tc["name"],
                                         "args": tc.get("args", {})
                                     })
-                            if isinstance(msg, AIMessage) and msg.content:
-                                final_response = msg.content
             except Exception as e:
                 logger.error("Tool eval error: %s", e)
 
@@ -169,7 +165,8 @@ class PolicyAgentEvaluator:
                 args_correct += 1
 
             status = "✅ PASS" if (eval_res["tool_match"] and eval_res["args_match"]) else "❌ FAIL"
-            print(f"  [{item['id']}] {status} | Expected: {expected_tool} | Called: {eval_res['actual_tools']} ({dur:.2f}s)")
+            tools_called = eval_res['actual_tools']
+            print(f"  [{item['id']}] {status} | Expected: {expected_tool} | Called: {tools_called} ({dur:.2f}s)")
 
             results.append({
                 "id": item["id"],
@@ -253,7 +250,10 @@ class PolicyAgentEvaluator:
             groundedness_scores.append(judge_res["groundedness"])
             relevance_scores.append(judge_res["relevance"])
 
-            print(f"  [{item['id']}] Groundedness: {judge_res['groundedness']}/5.0 | Relevance: {judge_res['relevance']}/5.0 | Keypoint Coverage: {cov_res['coverage_pct']}% ({dur:.2f}s)")
+            g_score = judge_res['groundedness']
+            r_score = judge_res['relevance']
+            cov = cov_res['coverage_pct']
+            print(f"  [{item['id']}] Groundedness: {g_score}/5 | Relevance: {r_score}/5 | Cov: {cov}% ({dur:.2f}s)")
 
             results.append({
                 "id": item["id"],
@@ -327,18 +327,25 @@ async def main():
 
     # Save Markdown Report
     md_path = "eval/reports/eval_report.md"
+    r_stat = '✅ Pass' if router_metrics['accuracy'] >= 90 else '⚠️ Needs Attention'
+    t_stat = '✅ Pass' if tool_metrics['tool_selection_accuracy'] >= 90 else '⚠️ Needs Attention'
+    a_stat = '✅ Pass' if tool_metrics['argument_extraction_accuracy'] >= 85 else '⚠️ Needs Attention'
+    rg_stat = '✅ Pass' if rag_metrics['avg_groundedness'] >= 4.0 else '⚠️ Needs Attention'
+    rr_stat = '✅ Pass' if rag_metrics['avg_relevance'] >= 4.0 else '⚠️ Needs Attention'
+    c_stat = '✅ Pass' if rag_metrics['avg_keypoint_coverage'] >= 80 else '⚠️ Needs Attention'
+
     md_content = f"""# 📊 Policy Agent Evaluation Report
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ## Summary Scorecard
 | Metric | Score | Target | Status |
 |--------|-------|--------|--------|
-| **Router Intent Accuracy** | {router_metrics['accuracy']}% | ≥ 90% | {'✅ Pass' if router_metrics['accuracy'] >= 90 else '⚠️ Needs Attention'} |
-| **Tool Selection Accuracy** | {tool_metrics['tool_selection_accuracy']}% | ≥ 90% | {'✅ Pass' if tool_metrics['tool_selection_accuracy'] >= 90 else '⚠️ Needs Attention'} |
-| **Argument Extraction Accuracy** | {tool_metrics['argument_extraction_accuracy']}% | ≥ 85% | {'✅ Pass' if tool_metrics['argument_extraction_accuracy'] >= 85 else '⚠️ Needs Attention'} |
-| **RAG Groundedness** | {rag_metrics['avg_groundedness']} / 5.0 | ≥ 4.0 | {'✅ Pass' if rag_metrics['avg_groundedness'] >= 4.0 else '⚠️ Needs Attention'} |
-| **RAG Answer Relevance** | {rag_metrics['avg_relevance']} / 5.0 | ≥ 4.0 | {'✅ Pass' if rag_metrics['avg_relevance'] >= 4.0 else '⚠️ Needs Attention'} |
-| **Keypoint Coverage** | {rag_metrics['avg_keypoint_coverage']}% | ≥ 80% | {'✅ Pass' if rag_metrics['avg_keypoint_coverage'] >= 80 else '⚠️ Needs Attention'} |
+| **Router Intent Accuracy** | {router_metrics['accuracy']}% | ≥ 90% | {r_stat} |
+| **Tool Selection Accuracy** | {tool_metrics['tool_selection_accuracy']}% | ≥ 90% | {t_stat} |
+| **Argument Extraction Accuracy** | {tool_metrics['argument_extraction_accuracy']}% | ≥ 85% | {a_stat} |
+| **RAG Groundedness** | {rag_metrics['avg_groundedness']} / 5.0 | ≥ 4.0 | {rg_stat} |
+| **RAG Answer Relevance** | {rag_metrics['avg_relevance']} / 5.0 | ≥ 4.0 | {rr_stat} |
+| **Keypoint Coverage** | {rag_metrics['avg_keypoint_coverage']}% | ≥ 80% | {c_stat} |
 
 *Total evaluation time: {total_duration:.2f}s*
 """
@@ -355,7 +362,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     print(f"  • RAG Answer Relevance:          {rag_metrics['avg_relevance']} / 5.0")
     print(f"  • Keypoint Coverage:             {rag_metrics['avg_keypoint_coverage']}%")
     print("=" * 70)
-    print(f"📄 Reports saved to:")
+    print("📄 Reports saved to:")
     print(f"   - {json_path}")
     print(f"   - {md_path}")
     print("=" * 70)

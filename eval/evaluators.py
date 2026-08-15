@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +91,8 @@ Evaluate the Assistant Response based on the User Query and the Retrieved Contex
 {response}
 
 Evaluate on a scale of 1 to 5 for each dimension:
-1. Groundedness / Faithfulness (1-5): Is every factual claim in the response supported by the retrieved context? (5 = 100% faithful, 1 = hallucinated/contradicts context).
-2. Answer Relevance (1-5): Does the response directly and clearly answer the user query? (5 = perfect answer, 1 = completely unhelpful/off-topic).
+1. Groundedness / Faithfulness (1-5): Is every factual claim supported by context? (5=faithful, 1=hallucinated).
+2. Answer Relevance (1-5): Does the response directly answer the user query? (5=perfect, 1=off-topic).
 3. Tone & Professionalism (1-5): Is the tone helpful, empathetic, and appropriate for insurance?
 
 Respond ONLY with valid JSON in this exact structure:
