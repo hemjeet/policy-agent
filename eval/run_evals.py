@@ -239,7 +239,7 @@ class PolicyAgentEvaluator:
             judge_res = await evaluate_rag_response_with_judge(
                 self.llm,
                 query=query,
-                context=retrieved_context or "Insurance Knowledge Base",
+                context=retrieved_context or item.get("reference_context", ""),
                 response=final_response
             )
             groundedness_scores.append(judge_res["groundedness"])

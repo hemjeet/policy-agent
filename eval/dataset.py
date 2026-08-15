@@ -144,6 +144,14 @@ RAG_EVAL_DATASET = [
     {
         "id": "rag_01",
         "query": "How do I file a cashless claim at a network hospital?",
+        "reference_context": (
+            "Cashless Claims Process at Network Hospitals:\n"
+            "1. Admission: Get admitted to an empanelled network hospital.\n"
+            "2. Identification: Show your SecureLife Health Card or Policy document at the TPA desk.\n"
+            "3. Pre-Authorization: The hospital fills the pre-authorization form and submits it to the insurer.\n"
+            "4. Approval: The insurer reviews and issues an initial approval letter.\n"
+            "5. Settlement: Hospital settles bill directly with insurer upon discharge."
+        ),
         "expected_key_points": [
             "Network hospital admission",
             "Show health card or policy copy at TPA desk",
@@ -158,6 +166,13 @@ RAG_EVAL_DATASET = [
     {
         "id": "rag_02",
         "query": "What is No Claim Bonus (NCB) in motor insurance?",
+        "reference_context": (
+            "No Claim Bonus (NCB) in Motor Insurance:\n"
+            "1. Definition: NCB is a reward/discount on the Own Damage (OD) premium for claim-free years.\n"
+            "2. Slab: Starts at 20% after the 1st claim-free year up to 50% for 5 consecutive claim-free years.\n"
+            "3. Transferability: NCB belongs to the policyholder/owner, not the vehicle.\n"
+            "4. Exclusions: NCB applies only to Own Damage component, not third-party premium."
+        ),
         "expected_key_points": [
             "Discount on own-damage premium",
             "Earned for claim-free policy years",
@@ -170,6 +185,12 @@ RAG_EVAL_DATASET = [
     {
         "id": "rag_03",
         "query": "Is maternity covered under individual health insurance?",
+        "reference_context": (
+            "Maternity Coverage under Health Insurance:\n"
+            "1. Coverage Terms: Maternity expenses are covered if policy includes maternity benefit rider.\n"
+            "2. Waiting Period: Standard policies require a mandatory waiting period of 9 to 24-48 months.\n"
+            "3. Newborn Coverage: Newborn baby is typically covered from day 1 up to 90 days."
+        ),
         "expected_key_points": [
             "Depends on policy terms and waiting period",
             "Standard waiting period typically applies"
