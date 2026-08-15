@@ -139,19 +139,17 @@ class PolicyAgentEvaluator:
             actual_tool_calls = []
 
             try:
-                async for event in self.graph.astream(
+                res = await self.graph.ainvoke(
                     {"messages": [HumanMessage(content=query)]},
                     config=config
-                ):
-                    for node_name, node_output in event.items():
-                        msgs = node_output.get("messages", [])
-                        for msg in msgs:
-                            if isinstance(msg, AIMessage) and msg.tool_calls:
-                                for tc in msg.tool_calls:
-                                    actual_tool_calls.append({
-                                        "name": tc["name"],
-                                        "args": tc.get("args", {})
-                                    })
+                )
+                for msg in res.get("messages", []):
+                    if isinstance(msg, AIMessage) and msg.tool_calls:
+                        for tc in msg.tool_calls:
+                            actual_tool_calls.append({
+                                "name": tc["name"],
+                                "args": tc.get("args", {})
+                            })
             except Exception as e:
                 logger.error("Tool eval error: %s", e)
 
@@ -218,18 +216,15 @@ class PolicyAgentEvaluator:
             retrieved_context = ""
 
             try:
-                async for event in self.graph.astream(
+                res = await self.graph.ainvoke(
                     {"messages": [HumanMessage(content=query)]},
                     config=config
-                ):
-                    for node_name, node_output in event.items():
-                        msgs = node_output.get("messages", [])
-                        for msg in msgs:
-                            if isinstance(msg, AIMessage) and msg.content:
-                                final_response = msg.content
-                            # Check tool response for context
-                            if hasattr(msg, "content") and "answer" in str(msg.content):
-                                retrieved_context += str(msg.content)
+                )
+                for msg in res.get("messages", []):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        final_response = str(msg.content)
+                    if getattr(msg, "type", "") == "tool" or msg.__class__.__name__ == "ToolMessage":
+                        retrieved_context += str(msg.content)
             except Exception as e:
                 logger.error("RAG eval error: %s", e)
 
