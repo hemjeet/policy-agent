@@ -9,7 +9,7 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────
-  # Job 1: Lint & Unit Tests (Fast & Free)
+  # Job 1: Fast Lint & Unit Tests
   # ──────────────────────────────────────────────
   test:
     name: Lint & Unit Tests
@@ -40,52 +40,19 @@ jobs:
         run: pytest tests/ -v --tb=short
 
   # ──────────────────────────────────────────────
-  # Job 2: Build Local Docker Image & Run Evals Inside Container
+  # Job 2: Build Once -> Eval Exact Image -> Push to ECR (PASS ONLY)
   # ──────────────────────────────────────────────
-  build-and-eval:
-    name: Build Container & Run Agent Evals
+  build-and-push:
+    name: Build, Evaluate & Push Golden Image
     needs: [test]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Prune previous Docker build and image cache
-        run: docker system prune -af --volumes || true
-
-      - name: Build local Docker image (NO ECR PUSH)
-        run: docker build -t policy-agent:test .
-
-      - name: Run Agent Evaluation Quality Gate inside container
-        run: |
-          docker run --rm \
-            -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
-            -e DEEPSEEK_API_KEY="${{ secrets.DEEPSEEK_API_KEY }}" \
-            -e CLAUDE_API_KEY="${{ secrets.CLAUDE_API_KEY }}" \
-            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            -e POSTGRES_URI="${{ secrets.POSTGRES_URI }}" \
-            -e EVAL_ROUTER_MIN_ACCURACY=90.0 \
-            -e EVAL_TOOL_MIN_ACCURACY=85.0 \
-            -e EVAL_RAG_MIN_GROUNDEDNESS=3.8 \
-            -e EVAL_RAG_MIN_RELEVANCE=3.8 \
-            policy-agent:test python eval/run_evals.py
-
-      - name: Cleanup evaluation container and image
-        if: always()
-        run: |
-          docker rmi -f policy-agent:test || true
-          docker system prune -af --volumes || true
-
-  # ──────────────────────────────────────────────
-  # Job 3: Push Golden Image to ECR (PASS ONLY)
-  # ──────────────────────────────────────────────
-  push-to-ecr:
-    name: Push Golden Image to ECR
-    needs: [build-and-eval]
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prune previous Docker cache
+        run: docker system prune -af --volumes || true
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -102,11 +69,32 @@ jobs:
           TAG=${GITHUB_SHA::7}
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Build & Push verified image to ECR
+      - name: 1. Build Docker Image (Built ONCE)
         run: |
           URI=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}
           TAG=${{ steps.meta.outputs.image_tag }}
           docker build -t $URI:$TAG -t $URI:latest .
+
+      - name: 2. Evaluate Exact Built Image (Quality Gate)
+        run: |
+          URI=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}
+          TAG=${{ steps.meta.outputs.image_tag }}
+          docker run --rm \
+            -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+            -e DEEPSEEK_API_KEY="${{ secrets.DEEPSEEK_API_KEY }}" \
+            -e CLAUDE_API_KEY="${{ secrets.CLAUDE_API_KEY }}" \
+            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            -e POSTGRES_URI="${{ secrets.POSTGRES_URI }}" \
+            -e EVAL_ROUTER_MIN_ACCURACY=90.0 \
+            -e EVAL_TOOL_MIN_ACCURACY=85.0 \
+            -e EVAL_RAG_MIN_GROUNDEDNESS=3.8 \
+            -e EVAL_RAG_MIN_RELEVANCE=3.8 \
+            $URI:$TAG python eval/run_evals.py
+
+      - name: 3. Push to ECR (PASS ONLY)
+        run: |
+          URI=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}
+          TAG=${{ steps.meta.outputs.image_tag }}
           docker push $URI:$TAG
           docker push $URI:latest
 
@@ -115,11 +103,11 @@ jobs:
         run: docker system prune -af --volumes || true
 
   # ──────────────────────────────────────────────
-  # Job 4: Deploy to Staging & Smoke Tests
+  # Job 3: Deploy to Staging & Smoke Tests
   # ──────────────────────────────────────────────
   deploy-staging:
     name: Deploy & Smoke Test Staging
-    needs: [push-to-ecr]
+    needs: [build-and-push]
     if: github.ref == 'refs/heads/policy-agent-v4' || github.ref == 'refs/heads/policy-agent-v3' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     environment: staging
@@ -138,7 +126,7 @@ jobs:
               docker login --username AWS --password-stdin \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-            IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ needs.push-to-ecr.outputs.image_tag }}
+            IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ needs.build-and-push.outputs.image_tag }}
 
             # Stop old container and clean up disk
             docker stop policy-agent 2>/dev/null || true
@@ -184,11 +172,11 @@ jobs:
             fi
 
   # ──────────────────────────────────────────────
-  # Job 5: Deploy to Production (Manual Approval Gate)
+  # Job 4: Deploy to Production (Manual Approval Gate)
   # ──────────────────────────────────────────────
   deploy-production:
     name: Deploy to Production
-    needs: [deploy-staging, push-to-ecr]
+    needs: [deploy-staging, build-and-push]
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
@@ -207,7 +195,7 @@ jobs:
               docker login --username AWS --password-stdin \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-            IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ needs.push-to-ecr.outputs.image_tag }}
+            IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ needs.build-and-push.outputs.image_tag }}
 
             # Stop old container and clean up disk
             docker stop policy-agent 2>/dev/null || true
