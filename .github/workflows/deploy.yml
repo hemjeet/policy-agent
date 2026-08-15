@@ -2,7 +2,7 @@ name: Build & Deploy to AWS EC2
 
 on:
   push:
-    branches: [policy-agent-v3, master, main]
+    branches: [policy-agent-v4, policy-agent-v3, master, main]
 
 env:
   ECR_REPO: policy-agent
