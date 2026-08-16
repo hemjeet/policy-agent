@@ -106,6 +106,7 @@ python app.py
 | `POST /chat` | Single-turn chat |
 | `POST /chat/stream` | Streaming chat (SSE) |
 | `GET /ui` | Gradio chat UI |
+| `GET /docs` | Interactive Swagger / OpenAPI documentation |
 
 ### Gradio UI (standalone)
 
@@ -146,6 +147,8 @@ python eval/run_evals.py
 
 ```
 policy-agent/
+├── .github/workflows/deploy.yml   # CI/CD pipeline (Lint, Eval, ECR, Staging, Prod)
+├── Dockerfile                     # Multi-stage production container build
 ├── app.py                         # FastAPI app + Gradio mount
 ├── gradio_ui.py                   # Gradio chat UI
 ├── requirements.txt
@@ -226,6 +229,8 @@ policy-agent/
 | `EVAL_RAG_MIN_GROUNDEDNESS` | Eval gate (default `3.8`) |
 | `EVAL_RAG_MIN_RELEVANCE` | Eval gate (default `3.8`) |
 | `EVAL_RAG_MIN_COVERAGE` | Eval gate (default `80.0`) |
+
+> 💡 **Tip:** If your PostgreSQL password contains special characters (such as `@`, `#`, or `:`), URL-encode them (e.g. replace `@` with `%40`) while keeping the host delimiter `@aws-...` intact.
 
 ---
 
