@@ -13,11 +13,10 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL = "text-embedding-3-small"
 CACHE_THRESHOLD = float(os.getenv("KB_CACHE_THRESHOLD", "0.89"))
 
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-
 def _embed(text: str) -> list[float]:
-    response = _client.embeddings.create(input=text, model=EMBEDDING_MODEL)
+    api_key = os.getenv("OPENAI_API_KEY") or "dummy-key"
+    client = OpenAI(api_key=api_key)
+    response = client.embeddings.create(input=text, model=EMBEDDING_MODEL)
     return response.data[0].embedding
 
 

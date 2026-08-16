@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -40,7 +41,12 @@ async def search_knowledge_base(query: str, config: RunnableConfig, top_k: int =
         logger.info("KB search vs_collection=%s vs_type=%s",
                     getattr(vectorstore, 'collection_name', '?'),
                     type(vectorstore).__name__)
-        results = await vectorstore.asimilarity_search(query, k=top_k)
+        if getattr(vectorstore, "async_mode", False) or getattr(vectorstore, "_async_engine", None) is not None:
+            results = await vectorstore.asimilarity_search(query, k=top_k)
+        elif hasattr(vectorstore, "similarity_search"):
+            results = await asyncio.to_thread(vectorstore.similarity_search, query, k=top_k)
+        else:
+            results = await vectorstore.asimilarity_search(query, k=top_k)
         logger.info("KB search query='%s' returned %d chunks", query[:80], len(results))
 
         if not results:
