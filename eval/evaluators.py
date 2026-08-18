@@ -44,6 +44,7 @@ def evaluate_tool_call(
             "args_match": False,
             "actual_tools": [],
             "expected_tool": expected_tool,
+
             "details": "No tools were called by the agent."
         }
 
@@ -105,7 +106,6 @@ Respond ONLY with valid JSON in this exact structure:
   "reason": "Short explanation of the score"
 }}
 """
-
 
 def _parse_judge_json(content: str) -> Optional[Dict[str, Any]]:
     """Parse the judge's JSON output, tolerating markdown fences and stray text."""

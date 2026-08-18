@@ -13,7 +13,7 @@ from langgraph.types import RetryPolicy
 import httpx
 import tiktoken
 
-from .config import SYSTEM_PROMPT, TOOLS, KB_TOOL, ROUTER_PROMPT
+from .config import SYSTEM_PROMPT, TOOLS, KB_TOOL, ROUTER_PROMPT, OUT_OF_SCOPE_RESPONSE
 from .state import PolicyAgentState
 from .semantic_cache import SemanticCache
 
@@ -124,6 +124,8 @@ class PolicyAgent:
             intent = data.get("intent", "TRANSACTIONAL").upper()
             if "KNOWLEDGE" in intent:
                 return "KNOWLEDGE_BASE"
+            if "SCOPE" in intent or "OUT" in intent:
+                return "OUT_OF_SCOPE"
             return "TRANSACTIONAL"
         except Exception as e:
             logger.warning(f"Failed to run router LLM: {e}. Defaulting to TRANSACTIONAL.")
@@ -136,6 +138,11 @@ class PolicyAgent:
             iteration_count = 1
             intent = await self._router_llm(state)
             updates['intent'] = intent
+
+            if intent == "OUT_OF_SCOPE":
+                updates['messages'] = AIMessage(content=OUT_OF_SCOPE_RESPONSE)
+                updates['iteration_count'] = iteration_count
+                return updates
 
             if intent == "KNOWLEDGE_BASE":
                 cached = await asyncio.to_thread(self.cache.lookup, messages[-1].content)
@@ -185,7 +192,7 @@ class PolicyAgent:
         updates['iteration_count'] = iteration_count
         return updates
 
-    async def _should_continue(self, state: PolicyAgentState):
+    def _should_continue(self, state: PolicyAgentState):
         last_msg = state['messages'][-1]
 
         if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
