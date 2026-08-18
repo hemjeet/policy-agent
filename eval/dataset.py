@@ -145,9 +145,11 @@ TOOL_EVAL_DATASET = [
     },
     {
         "id": "tool_04",
-        "query": "What are the rules and steps to file a reimbursement claim?",
-        "expected_tool": "search_knowledge_base",
-        "expected_args_key": "query"
+        "query": "Can you check all policies under email rajesh.kumar@example.com?",
+        "expected_tool": "get_policy_info",
+        "expected_args": {
+            "customer_email": "rajesh.kumar@example.com"
+        }
     },
     {
         "id": "tool_05",
