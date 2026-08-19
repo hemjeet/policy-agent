@@ -9,6 +9,7 @@ from langchain_core.tools import tool
 from data.db import SessionLocal
 from data.models import Customer, Policy, Claim
 from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
+from agent.pii import resolve_pii, register_pii, mask_text
 logger = logging.getLogger(__name__)
 
 
@@ -82,16 +83,29 @@ def check_claim_status(phone_number: str) -> str:
     output = ClaimStatusOutput(success=False, message="")
     db = SessionLocal()
 
+    # Resolve token if passed masked arg
+    resolved_phone = resolve_pii(phone_number)
+
     try:
         # 1. Find the customer by phone number
-        customer = db.query(Customer).filter(Customer.phone == phone_number).first()
+        customer = (
+            db.query(Customer)
+            .filter((Customer.phone == resolved_phone) | (Customer.phone == phone_number))
+            .first()
+        )
 
         if not customer:
             output.message = (
                 f"No customer found with phone number {phone_number}. "
                 "Please verify the number or ask for their claim number."
             )
-            return output.model_dump_json()
+            return mask_text(output.model_dump_json())
+
+        # Register customer PII in vault
+        register_pii(customer.phone, "PHONE")
+        register_pii(customer.full_name, "NAME")
+        register_pii(customer.first_name, "NAME")
+        register_pii(customer.last_name, "NAME")
 
         output.customer_name = customer.full_name
         output.success = True
@@ -109,10 +123,14 @@ def check_claim_status(phone_number: str) -> str:
             output.message = (
                 f"Customer {customer.full_name} found, but they have no claims on file."
             )
-            return output.model_dump_json()
+            return mask_text(output.model_dump_json())
 
         # 3. Build the output for each claim
         for claim in claims:
+            register_pii(claim.claim_number, "CLAIM_NO")
+            if claim.policy:
+                register_pii(claim.policy.policy_number, "POLICY_NO")
+
             # The status_history relationship is already ordered by created_at
             history = [
                 ClaimStatusEntry(
@@ -160,4 +178,4 @@ def check_claim_status(phone_number: str) -> str:
     finally:
         db.close()
 
-    return output.model_dump_json()
+    return mask_text(output.model_dump_json())

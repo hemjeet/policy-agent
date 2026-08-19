@@ -11,6 +11,7 @@ from data.db import SessionLocal
 from data.models import Customer, Policy, Claim
 from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
 
+from agent.pii import resolve_pii, register_pii, mask_text
 logger = logging.getLogger(__name__)
 
 
@@ -67,20 +68,25 @@ def get_customer_info(
     output = CustomerInfoOutput(success=False, message="")
     db = SessionLocal()
 
+    # Resolve token if passed masked arg
+    resolved_email = resolve_pii(email) if email else None
+    resolved_phone = resolve_pii(phone) if phone else None
+    resolved_id = resolve_pii(customer_id) if customer_id else None
+
     try:
         query = db.query(Customer)
 
-        if email:
-            query = query.filter(Customer.email == email)
-        elif phone:
-            query = query.filter(Customer.phone == phone)
-        elif customer_id:
-            query = query.filter(Customer.id == customer_id)
+        if resolved_email:
+            query = query.filter((Customer.email == resolved_email) | (Customer.email == email))
+        elif resolved_phone:
+            query = query.filter((Customer.phone == resolved_phone) | (Customer.phone == phone))
+        elif resolved_id:
+            query = query.filter((Customer.id == resolved_id) | (Customer.id == customer_id))
         else:
             output.message = (
                 "Please provide an email, phone number, or customer ID to look up."
             )
-            return output.model_dump_json()
+            return mask_text(output.model_dump_json())
 
         customer = query.first()
 
@@ -89,7 +95,26 @@ def get_customer_info(
                 "No customer found matching the provided details. "
                 "Please verify the information and try again."
             )
-            return output.model_dump_json()
+            return mask_text(output.model_dump_json())
+
+        # Register customer PII in vault
+        register_pii(str(customer.id), "CUSTOMER_ID")
+        register_pii(customer.full_name, "NAME")
+        register_pii(customer.first_name, "NAME")
+        register_pii(customer.last_name, "NAME")
+        register_pii(customer.email, "EMAIL")
+        if customer.phone:
+            register_pii(customer.phone, "PHONE")
+        if customer.date_of_birth:
+            register_pii(str(customer.date_of_birth), "DOB")
+        if customer.full_address:
+            register_pii(customer.full_address, "ADDRESS")
+        if customer.city:
+            register_pii(customer.city, "ADDRESS")
+        if customer.state:
+            register_pii(customer.state, "ADDRESS")
+        if customer.pincode:
+            register_pii(customer.pincode, "ADDRESS")
 
         total_policies = (
             db.query(func.count(Policy.id))
@@ -146,4 +171,4 @@ def get_customer_info(
     finally:
         db.close()
 
-    return output.model_dump_json()
+    return mask_text(output.model_dump_json())

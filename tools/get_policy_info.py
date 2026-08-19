@@ -11,6 +11,7 @@ from data.db import SessionLocal
 from data.models import Customer, Policy, Claim
 from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
 
+from agent.pii import resolve_pii, register_pii, mask_text
 logger = logging.getLogger(__name__)
 
 
@@ -84,26 +85,33 @@ def get_policy_info(
     output = PolicyInfoOutput(success=False, message="")
     db = SessionLocal()
 
+    # Resolve token if passed masked arg
+    resolved_policy_num = resolve_pii(policy_number) if policy_number else None
+    resolved_email = resolve_pii(customer_email) if customer_email else None
+    resolved_phone = resolve_pii(customer_phone) if customer_phone else None
+
     try:
         query = db.query(Policy)
 
-        if policy_number:
-            query = query.filter(Policy.policy_number == policy_number)
-        elif customer_email:
-            query = (
-                query.join(Customer, Policy.customer_id == Customer.id)
-                .filter(Customer.email == customer_email)
+        if resolved_policy_num:
+            query = query.filter(
+                (Policy.policy_number == resolved_policy_num) | (Policy.policy_number == policy_number)
             )
-        elif customer_phone:
+        elif resolved_email:
             query = (
                 query.join(Customer, Policy.customer_id == Customer.id)
-                .filter(Customer.phone == customer_phone)
+                .filter((Customer.email == resolved_email) | (Customer.email == customer_email))
+            )
+        elif resolved_phone:
+            query = (
+                query.join(Customer, Policy.customer_id == Customer.id)
+                .filter((Customer.phone == resolved_phone) | (Customer.phone == customer_phone))
             )
         else:
             output.message = (
                 "Please provide a policy number, customer email, or phone number to look up."
             )
-            return output.model_dump_json()
+            return mask_text(output.model_dump_json())
 
         if status_filter:
             query = query.filter(Policy.status == status_filter.lower())
@@ -115,17 +123,27 @@ def get_policy_info(
                 "No policies found matching the provided criteria. "
                 "Please verify the information and try again."
             )
-            return output.model_dump_json()
+            return mask_text(output.model_dump_json())
 
         # Get the customer name from the first policy's customer
         first_policy = policies[0]
         customer = db.query(Customer).filter(Customer.id == first_policy.customer_id).first()
         customer_name = customer.full_name if customer else "Unknown"
 
+        if customer:
+            register_pii(customer.full_name, "NAME")
+            register_pii(customer.first_name, "NAME")
+            register_pii(customer.last_name, "NAME")
+            register_pii(customer.email, "EMAIL")
+            if customer.phone:
+                register_pii(customer.phone, "PHONE")
+
         output.customer_name = customer_name
         output.success = True
 
         for policy in policies:
+            register_pii(policy.policy_number, "POLICY_NO")
+
             # Count active claims for this policy
             active_claims = (
                 db.query(func.count(Claim.id))
@@ -174,4 +192,4 @@ def get_policy_info(
     finally:
         db.close()
 
-    return output.model_dump_json()
+    return mask_text(output.model_dump_json())

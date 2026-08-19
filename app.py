@@ -29,6 +29,7 @@ from slowapi.errors import RateLimitExceeded
 
 from agent import PolicyAgent
 from agent.runtime import build_llm, build_embeddings, build_vectorstore
+from agent.pii import mask_text, unmask_text, StreamingUnmasker, PIILogFilter
 import gradio as gr
 
 from gradio_ui import create_demo
@@ -47,6 +48,9 @@ if not _has_file_handler:
     _file_handler.setFormatter(_log_fmt)
     logging.getLogger().addHandler(_file_handler)
     logging.getLogger().setLevel(logging.INFO)
+
+# Strip any PII that slips through source-level masking (defense-in-depth)
+logging.getLogger().addFilter(PIILogFilter())
 
 for _noisy in (
     "watchfiles", "httpcore", "httpx", "urllib3", "PIL",
@@ -233,11 +237,13 @@ async def chat(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)
     thread_id = _resolve_thread_id(req.thread_id)
     config = _get_config(thread_id, app.state.vectorstore)
 
+    masked_msg = mask_text(req.message)
+
     try:
         t_invoke = time.perf_counter()
         with using_session(session_id=thread_id):
             result = await asyncio.wait_for(
-                app.state.graph.ainvoke({"messages": [HumanMessage(content=req.message)]}, config),
+                app.state.graph.ainvoke({"messages": [HumanMessage(content=masked_msg)]}, config),
                 timeout=60.0,
             )
         logger.info("TIMING thread=%s ainvoke=%.2fs", thread_id[:8], time.perf_counter() - t_invoke)
@@ -248,7 +254,8 @@ async def chat(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)
         raise HTTPException(500, detail="Internal error")
 
     last_msg = result.get("messages")[-1]
-    resp = last_msg.content if isinstance(last_msg, AIMessage) else "No response generated."
+    raw_resp = last_msg.content if isinstance(last_msg, AIMessage) else "No response generated."
+    resp = unmask_text(raw_resp)
 
     return ChatResponse(response=resp, thread_id=thread_id)
 
@@ -259,11 +266,13 @@ async def chat_stream(request: Request, req: ChatRequest, _auth=Depends(verify_a
     thread_id = _resolve_thread_id(req.thread_id)
     config = _get_config(thread_id, app.state.vectorstore)
 
-    input_msg = HumanMessage(content=req.message)
+    masked_msg = mask_text(req.message)
+    input_msg = HumanMessage(content=masked_msg)
 
     async def event_stream():
         try:
             t_start = time.perf_counter()
+            unmasker = StreamingUnmasker()
             with using_session(session_id=thread_id):
                 async for msg_chunk, metadata in app.state.graph.astream(
                     {"messages": [input_msg]}, config, stream_mode="messages"
@@ -273,7 +282,11 @@ async def chat_stream(request: Request, req: ChatRequest, _auth=Depends(verify_a
                         and msg_chunk.content
                         and metadata.get("langgraph_node") == "llm_call"
                     ):
-                        yield f"data: {json.dumps({'content': msg_chunk.content})}\n\n"
+                        for piece in unmasker.process_chunk(msg_chunk.content):
+                            yield f"data: {json.dumps({'content': piece})}\n\n"
+                for piece in unmasker.flush():
+                    yield f"data: {json.dumps({'content': piece})}\n\n"
+
             logger.info("STREAM DONE thread=%s time=%.2fs", thread_id[:8], time.perf_counter() - t_start)
             yield "data: [DONE]\n\n"
         except Exception as e:

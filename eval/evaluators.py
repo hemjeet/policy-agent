@@ -13,6 +13,8 @@ import re
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage
 
+from agent.pii import resolve_pii
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +46,6 @@ def evaluate_tool_call(
             "args_match": False,
             "actual_tools": [],
             "expected_tool": expected_tool,
-
             "details": "No tools were called by the agent."
         }
 
@@ -60,10 +61,11 @@ def evaluate_tool_call(
         else:
             call_args = target_call.get("args", {})
             for key, exp_val in expected_args.items():
-                act_val = call_args.get(key)
-                if act_val is None:
+                raw_act_val = call_args.get(key)
+                if raw_act_val is None:
                     args_match = False
                     break
+                act_val = resolve_pii(str(raw_act_val))
                 # Normalize string comparison (e.g. phone numbers, emails)
                 norm_act = re.sub(r'[\s\-+]', '', str(act_val).lower())
                 norm_exp = re.sub(r'[\s\-+]', '', str(exp_val).lower())

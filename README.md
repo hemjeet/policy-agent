@@ -14,6 +14,7 @@ An AI-powered support agent that handles **Claims Status**, **Policy Information
 | **Semantic Cache** | Caches KB query→response pairs in pgvector to avoid repeat LLM calls |
 | **Observability** | Arize AX OpenTelemetry tracing of the full agent graph |
 | **Evaluation** | Automated quality gates (router / tools / RAG) that block bad deploys |
+| **PII Masking** | Reversible tokenization + one-way pseudonymization of customer PII at every boundary |
 
 ---
 
@@ -41,6 +42,41 @@ User → FastAPI (/chat, /chat/stream)
 - **Vector store**: async `PGVector` (LangChain) over the `langchain_pg_embedding` table, using the `postgresql+psycopg` async driver.
 - **Checkpointer**: LangGraph conversation state persisted via `AsyncPostgresSaver` (in-memory fallback when `POSTGRES_URI` is unset).
 - **Semantic cache**: `kb_cache` table (pgvector) keyed by query embedding.
+
+---
+
+## 🔐 PII Masking & Pseudonymization
+
+The agent handles real customer PII (names, emails, phones, addresses, dates of birth, policy/claim numbers). To keep that data from leaking to external LLM providers, tracing, logs, and the checkpointer, `agent/pii.py` implements a two-layer strategy:
+
+### 1. Reversible masking (the PII vault)
+
+PII is replaced with typed tokens (`[PHONE_1]`, `[EMAIL_1]`, `[NAME_1]`, `[POLICY_NO_1]`, …) before it enters the LangGraph agent:
+
+```
+User msg ──[mask]──► graph (LLM, router, tracing, checkpointer, cache all see tokens)
+                        │  LLM emits tool_call with [PHONE_1]
+                        ▼
+                  tool resolves [PHONE_1] → real value → queries Postgres
+                  tool masks its result → LLM sees tokens only
+Final answer ──[unmask]──► user sees real values
+```
+
+- Tokens are deterministic (the same value always maps to the same token) and reversible via an in-memory vault.
+- Applied at `/chat` and `/chat/stream` input/output, inside the DB tools, and in the semantic cache.
+- A streaming-safe unmasker prevents a token split across chunks (`[PHO` + `NE_1]`) from leaking.
+
+### 2. One-way pseudonymization (logs)
+
+For logs (where recovery is never required), PII is replaced with irreversible HMAC digests instead of tokens:
+
+- **AWS KMS** `GenerateMac` when `PII_KMS_KEY_ID` is set (the key stays in KMS; requires `boto3`).
+- **Local HMAC-SHA256** fallback when `PII_HMAC_KEY` is set (zero dependencies).
+- If neither is configured, detected PII in logs is replaced with `[REDACTED]`.
+
+A `PIILogFilter` runs on every log record as defense-in-depth, so `agent.log` never contains raw PII.
+
+> **Note:** Free-text *names* in user messages are not detected (regex can't reliably identify arbitrary names) — names are masked at the tool-output layer where the fields are known. Emails, phones, UUIDs, policy/claim numbers, Aadhaar, and PAN are detected in free text.
 
 ---
 
@@ -158,7 +194,8 @@ policy-agent/
 │   ├── state.py                   # Agent state schema
 │   ├── runtime.py                 # LLM / embeddings / vectorstore factories
 │   ├── semantic_cache.py          # pgvector semantic cache
-│   └── instrumentation.py         # Arize AX tracing
+│   ├── instrumentation.py         # Arize AX tracing
+│   └── pii.py                     # PII vault, masking, pseudonymization, log filter
 ├── tools/                         # LangChain tools
 │   ├── check_claim_status.py
 │   ├── get_policy_info.py
@@ -215,6 +252,11 @@ policy-agent/
 | `ROUTER_MODEL` | Router model name (display/logging) |
 | `OPENAI_MODEL` / `DEEPSEEK_MODEL` | Model names for fallback / primary LLM |
 | `JUDGE_MODEL` | Model used by the eval judge (default `gpt-4o`) |
+| `PII_MASKING_ENABLED` | Reversible PII masking on/off (default `true`) |
+| `PII_LOG_MASKING_ENABLED` | Log redaction on/off (default `true`) |
+| `PII_KMS_KEY_ID` | KMS HMAC key id/alias/ARN for one-way pseudonyms (optional; needs `boto3`) |
+| `PII_HMAC_KEY` | Local HMAC secret — fallback when KMS is not set |
+| `PII_KMS_MAC_ALGORITHM` | KMS MAC algorithm (default `HMAC_SHA_256`) |
 | `MAX_CONTEXT_TOKENS` | Context trimming budget (default `4000`) |
 | `MAX_ITERATIONS` | Agent loop limit (default `5`) |
 | `KB_CACHE_THRESHOLD` | Semantic cache similarity threshold (default `0.89`) |

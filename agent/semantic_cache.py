@@ -7,6 +7,7 @@ import logging
 from openai import OpenAI
 from data.db import SessionLocal
 from data.models import KnowledgeBaseCache
+from agent.pii import mask_text
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,8 @@ class SemanticCache:
     def lookup(self, query: str) -> str | None:
         db = SessionLocal()
         try:
-            embedding = _embed(query)
+            masked_query = mask_text(query)
+            embedding = _embed(masked_query)
             row = (
                 db.query(
                     KnowledgeBaseCache.id,
@@ -57,7 +59,9 @@ class SemanticCache:
     def store(self, query: str, response: str) -> None:
         db = SessionLocal()
         try:
-            embedding = _embed(query)
+            masked_query = mask_text(query)
+            masked_response = mask_text(response)
+            embedding = _embed(masked_query)
             row = (
                 db.query(
                     (1 - KnowledgeBaseCache.embedding.cosine_distance(embedding)).label("similarity"),
@@ -69,7 +73,7 @@ class SemanticCache:
             if row and row.similarity >= CACHE_THRESHOLD:
                 logger.info("KB cache: skipping duplicate store (similarity=%.4f)", row.similarity)
                 return
-            entry = KnowledgeBaseCache(query=query, response=response, embedding=embedding)
+            entry = KnowledgeBaseCache(query=masked_query, response=masked_response, embedding=embedding)
             db.add(entry)
             db.commit()
             logger.info("Stored in KB cache (pgvector)")
