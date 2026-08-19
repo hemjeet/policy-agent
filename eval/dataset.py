@@ -55,7 +55,19 @@ ROUTER_EVAL_DATASET = [
         "id": "router_kb_08",
         "query": "What is the difference between comprehensive and third-party car insurance?",
         "expected_intent": "KNOWLEDGE_BASE",
-        "category": "coverage"
+        "category": "comparison"
+    },
+    {
+        "id": "router_kb_09",
+        "query": "Hi, I need some help",
+        "expected_intent": "KNOWLEDGE_BASE",
+        "category": "greeting"
+    },
+    {
+        "id": "router_kb_10",
+        "query": "Hello! Good morning",
+        "expected_intent": "KNOWLEDGE_BASE",
+        "category": "greeting"
     },
 
     # Transactional Queries
