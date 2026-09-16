@@ -28,7 +28,7 @@ def _to_async_url(url: str) -> str:
 def build_llm():
     """Build the primary (DeepSeek) LLM with OpenAI fallback and the router LLM."""
     primary = ChatDeepSeek(
-        model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        model=os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
         api_key=os.getenv("DEEPSEEK_API_KEY"),
     )
     logger.info("  [ OK ] DeepSeek LLM loaded (%s)", os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"))

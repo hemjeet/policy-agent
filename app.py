@@ -28,7 +28,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from agent import PolicyAgent
-from agent.runtime import build_llm, build_embeddings, build_vectorstore
+from agent.runtime import build_llm
+from agent.vectorstore import init_vectorstore
 from agent.pii import mask_text, unmask_text, StreamingUnmasker, PIILogFilter
 import gradio as gr
 
@@ -113,7 +114,6 @@ async def lifespan(app: FastAPI):
     logger.info("─" * 56)
 
     postgres_uri = os.getenv("POSTGRES_URI")
-    embeddings = build_embeddings()
 
     # 1. LLM
     llm, router_llm = build_llm()
@@ -121,10 +121,8 @@ async def lifespan(app: FastAPI):
     # 2. Arize tracing
     _tracer_provider = setup_tracing()
 
-    # 3. vectorstore
-    vectorstore = build_vectorstore(postgres_uri, embeddings) if postgres_uri else None
-    if not postgres_uri:
-        logger.warning("  [SKIP] POSTGRES_URI not set - vectorstore disabled")
+    # 3. vectorstore (shared with MCP server)
+    vectorstore = init_vectorstore()
 
     # 4. Agent graph
     if postgres_uri:
@@ -197,6 +195,9 @@ app.add_middleware(
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
+
+# ── MCP server runs on separate port (see mcp_runner.py) ──────────────
+# Mounted on port 8001 to avoid ASGI middleware conflicts with SSE transport.
 
 
 @app.exception_handler(RateLimitExceeded)
