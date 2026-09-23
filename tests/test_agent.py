@@ -23,13 +23,13 @@ class TestRouterClassification:
         mock_llm = MagicMock()
         mock_router = AsyncMock()
         mock_checkpointer = MemorySaver()
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("agent.agent.SemanticCache", MagicMock)
-            agent = PolicyAgent(
-                router_llm=mock_router,
-                llm=mock_llm,
-                checkpointer=mock_checkpointer,
-            )
+        mock_cache = MagicMock()
+        agent = PolicyAgent(
+            router_llm=mock_router,
+            llm=mock_llm,
+            checkpointer=mock_checkpointer,
+            cache=mock_cache,
+        )
         agent.router_llm = mock_router
         return agent
 
@@ -60,7 +60,7 @@ class TestRouterClassification:
         agent.router_llm.ainvoke = AsyncMock(side_effect=Exception("LLM error"))
         state = {"messages": [HumanMessage(content="Hello")]}
         result = await agent._router_llm(state)
-        assert result == "TRANSACTIONAL"  # Should default to TRANSACTIONAL
+        assert result == "KNOWLEDGE_BASE"  # Should default to KNOWLEDGE_BASE on error
 
     @pytest.mark.asyncio
     async def test_router_handles_markdown_wrapped_json(self, agent):

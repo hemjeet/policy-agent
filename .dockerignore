@@ -12,4 +12,15 @@ venv/
 .gitignore
 README.md
 agent.log
+mcp_server.log
 docs/
+tmp/
+tests/
+eval/
+test.ipynb
+locustfile.py
+.ruff_cache/
+.mypy_cache/
+.github/
+.idea/
+.vscode/

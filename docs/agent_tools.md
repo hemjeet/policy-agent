@@ -20,49 +20,44 @@ The agent has access to 4 primary tools:
 ## Tool 1: `check_claim_status`
 
 ### Description
-Retrieves the current status and full history of an insurance claim. The agent uses this when a user asks about their claim status, claim details, or claim timeline.
+Retrieves the current status and full history of all insurance claims for a customer. The agent uses this when a user asks about their claim status, claim details, or claim timeline.
 
 ### Input Parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `claim_number` | string | No* | Claim number (e.g., "CLM-2024-0001") |
-| `policy_number` | string | No* | Policy number to find all associated claims |
-
-*At least one of `claim_number` or `policy_number` must be provided.
+| `phone_number` | string | Yes | Customer's registered phone number (e.g. "+91-9876543210") |
 
 ### Output Format
 
 ```json
 {
-  "claim": {
-    "claim_number": "CLM-2024-0001",
-    "status": "paid",
-    "claim_type": "Hospitalization",
-    "claim_amount": 85000.00,
-    "approved_amount": 80000.00,
-    "description": "Hospital admission for knee surgery...",
-    "incident_date": "2024-05-10",
-    "filed_date": "2024-05-15",
-    "resolved_date": "2024-06-01",
-    "policy_number": "POL-HLT-2024-001",
-    "policy_type": "health",
-    "customer_name": "Rajesh Sharma"
-  },
-  "history": [
+  "success": true,
+  "message": "Found 2 claim(s) for Rajesh Sharma. | CLM-2024-0001: paid (₹85,000) | CLM-2024-0003: under_review (₹45,000)",
+  "customer_name": "Rajesh Sharma",
+  "claims": [
     {
-      "old_status": null,
-      "new_status": "submitted",
-      "notes": "Claim submitted by customer via portal.",
-      "changed_by": "system",
-      "timestamp": "2024-05-15T10:30:00Z"
-    },
-    {
-      "old_status": "submitted",
-      "new_status": "under_review",
-      "notes": "Documents verified. Assigned to claims adjuster.",
-      "changed_by": "agent_ravi",
-      "timestamp": "2024-05-16T14:00:00Z"
+      "claim_number": "CLM-2024-0001",
+      "status": "paid",
+      "claim_type": "Hospitalization",
+      "claim_amount": 85000.0,
+      "approved_amount": 80000.0,
+      "description": "Hospital admission for knee surgery...",
+      "incident_date": "2024-05-10",
+      "filed_date": "2024-05-15",
+      "resolved_date": "2024-06-01",
+      "policy_number": "POL-HLT-2024-001",
+      "policy_type": "health",
+      "customer_name": "Rajesh Sharma",
+      "history": [
+        {
+          "old_status": null,
+          "new_status": "submitted",
+          "notes": "Claim submitted by customer via portal.",
+          "changed_by": "system",
+          "timestamp": "2024-05-15T10:30:00"
+        }
+      ]
     }
   ]
 }
@@ -71,15 +66,18 @@ Retrieves the current status and full history of an insurance claim. The agent u
 ### SQL Query (Behind the Tool)
 
 ```sql
--- Get claim details
-SELECT c.*, p.policy_number, p.policy_type,
-       cu.first_name || ' ' || cu.last_name AS customer_name
+-- Find customer by phone
+SELECT id, first_name, last_name, phone FROM customers
+WHERE phone = $1;
+
+-- Get all claims across all customer's policies
+SELECT c.*, p.policy_number, p.policy_type
 FROM claims c
 JOIN policies p ON c.policy_id = p.id
-JOIN customers cu ON p.customer_id = cu.id
-WHERE c.claim_number = $1;
+WHERE p.customer_id = $1
+ORDER BY c.filed_date DESC;
 
--- Get claim history
+-- Get claim history for each claim
 SELECT old_status, new_status, notes, changed_by, created_at
 FROM claim_status_history
 WHERE claim_id = $1
@@ -87,9 +85,9 @@ ORDER BY created_at ASC;
 ```
 
 ### Example User Queries
-- "What is the status of claim CLM-2024-0001?"
+- "What is the status of my claim?"
 - "Show me the history of my claim"
-- "Are there any pending claims on policy POL-HLT-2024-001?"
+- "Check my claims status" (customer provides phone number)
 
 ---
 
@@ -103,8 +101,8 @@ Retrieves detailed information about one or more insurance policies. Used when u
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `policy_number` | string | No* | Specific policy number |
-| `customer_id` | string | No* | Customer UUID to get all their policies |
 | `customer_email` | string | No* | Customer email to look up policies |
+| `customer_phone` | string | No* | Customer phone number to look up policies |
 | `status_filter` | string | No | Filter by status: "active", "expired", "cancelled", "pending" |
 
 *At least one of `policy_number`, `customer_id`, or `customer_email` must be provided.
@@ -148,6 +146,7 @@ WHERE p.policy_number = $1;
 - "What is my coverage amount?"
 - "When does my auto insurance expire?"
 - "Show me all active policies for rajesh.sharma@email.com"
+- "Show me my policies" (customer provides phone number)
 
 ---
 

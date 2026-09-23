@@ -118,8 +118,8 @@ class ClaimStatusHistory(Base):
 
 
 class KnowledgeBase(Base):
-    """Structured FAQ articles (optional, kept for direct Q&A lookups)."""
-    __tablename__ = "langchain_pg_embedding"
+    """Structured FAQ articles from the knowledge_base table."""
+    __tablename__ = "knowledge_base"
 
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     category = Column(Enum(*KB_CATEGORIES, name="kb_category", create_type=False), nullable=False)
@@ -127,6 +127,7 @@ class KnowledgeBase(Base):
     answer = Column(Text, nullable=False)
     tags = Column(ARRAY(Text), default=[])
     is_published = Column(Boolean, default=True)
+    embedding = Column(Vector(1536))
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 

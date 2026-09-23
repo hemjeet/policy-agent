@@ -3,25 +3,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# LLM configuration
-# ---------------------------------------------------------------------------
-
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")  # "openai" or "deepseek"
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-
-if LLM_PROVIDER == "deepseek":
-    LLM = {
-        "model": DEEPSEEK_MODEL,
-        "api_key": os.getenv("DEEPSEEK_API_KEY"),
-        "base_url": "https://api.deepseek.com",
-    }
-else:
-    LLM = {
-        "model": OPENAI_MODEL,
-        "api_key": os.getenv("OPENAI_API_KEY"),
-    }
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -137,7 +118,7 @@ OUT_OF_SCOPE_RESPONSE = (
 ROUTER_PROMPT = """You are an AI router for an insurance support agent.
 Your job is to analyze the user's latest query and decide whether the question should be answered using the general Knowledge Base, via transaction-specific tools (Claims / Policies database), or declined as out of scope.
 
-Categorize the user's intent into one of the following three options:
+Categorize the user's intent into one of the following four options:
 1. "KNOWLEDGE_BASE"
 Select this if the query is a general question about insurance concepts, rules, processes, how-tos, exclusions, timelines, or generic help.
 Also select this for greetings, pleasantries, and introductory messages (e.g. "Hi", "Hello", "Hey", "Good morning", "How can you help me?").
@@ -164,7 +145,14 @@ Examples:
 - "I registered with phone number +91-9876543210. Do I have any pending claims?"
 - "Is policy POL-HLT-2024-001 active?"
 
-3. "OUT_OF_SCOPE"
+3. "MIXED"
+Select this if the query asks for BOTH a specific transaction/account lookup AND general knowledge base information simultaneously.
+Examples:
+- "Check my claims status for [PHONE_1] and tell me the overall claim policy."
+- "Show me my policies, and also how do I file a new claim?"
+- "Is policy [POLICY_NO_1] active? Also what are the tax benefits of health insurance?"
+
+4. "OUT_OF_SCOPE"
 Select this if the query is completely unrelated to insurance or customer support.
 IMPORTANT: Do NOT classify greetings (e.g. "Hi", "Hello", "Hey") or polite messages as OUT_OF_SCOPE.
 This includes:
@@ -178,7 +166,7 @@ This includes:
 **Important:** If the query asks about general processes or timelines without providing a claim ID, phone number, or policy number, classify it as KNOWLEDGE_BASE — even if it uses "the claim" or "my claim".
 
 Respond ONLY with a JSON object containing:
-- "intent": one of "KNOWLEDGE_BASE", "TRANSACTIONAL", or "OUT_OF_SCOPE"
+- "intent": one of "KNOWLEDGE_BASE", "TRANSACTIONAL", "MIXED", or "OUT_OF_SCOPE"
 - "reason": a brief one-sentence reason for your classification.
 
 Ensure your output is valid JSON and contains no other text."""
@@ -196,13 +184,20 @@ from tools.get_customer_info import get_customer_info as _get_customer_info
 from tools.get_policy_info import get_policy_info as _get_policy_info
 from tools.search_knowledge_base import search_knowledge_base as _search_knowledge_base
 
+
+check_claim_status = _check_claim_status
+get_customer_info = _get_customer_info
+get_policy_info = _get_policy_info
+
 TOOLS = [
-    _check_claim_status,
-    _get_customer_info,
-    _get_policy_info,
+    check_claim_status,
+    get_customer_info,
+    get_policy_info,
 ]
 
 KB_TOOL = [_search_knowledge_base]
+
+ALL_TOOLS = TOOLS + KB_TOOL
 
 # ---------------------------------------------------------------------------
 # Redis semantic cache (used by agent_v2)

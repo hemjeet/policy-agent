@@ -12,7 +12,7 @@ import threading
 import logging
 import hashlib
 import hmac as hmac_lib
-from typing import Dict, Optional, Generator
+from typing import Generator
 
 from dotenv import load_dotenv
 
@@ -49,9 +49,9 @@ class PIIVault:
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._value_to_token: Dict[str, str] = {}
-        self._token_to_value: Dict[str, str] = {}
-        self._type_counters: Dict[str, int] = {}
+        self._value_to_token: dict[str, str] = {}
+        self._token_to_value: dict[str, str] = {}
+        self._type_counters: dict[str, int] = {}
 
     def clear(self) -> None:
         """Reset the vault (useful between test suites)."""
@@ -60,7 +60,7 @@ class PIIVault:
             self._token_to_value.clear()
             self._type_counters.clear()
 
-    def register(self, value: Optional[str], pii_type: str) -> str:
+    def register(self, value: str | None, pii_type: str) -> str:
         """Register a known real value and return its canonical token."""
         if not value or not str(value).strip():
             return ""
@@ -80,7 +80,7 @@ class PIIVault:
             self._token_to_value[token] = val_str
             return token
 
-    def resolve(self, text_or_token: Optional[str]) -> str:
+    def resolve(self, text_or_token: str | None) -> str:
         """Resolve a token (e.g. '[PHONE_1]') back to its real value.
 
         If the input is not a token or contains text, replaces any tokens found.
@@ -102,7 +102,7 @@ class PIIVault:
                     result = result.replace(token, real_val)
             return result
 
-    def mask_text(self, text: Optional[str]) -> str:
+    def mask_text(self, text: str | None) -> str:
         """Detect PII via registered values and regex patterns, replacing with tokens."""
         if not text or not PII_MASKING_ENABLED:
             return "" if text is None else str(text)
@@ -139,7 +139,7 @@ class PIIVault:
 
         return masked
 
-    def unmask_text(self, text: Optional[str]) -> str:
+    def unmask_text(self, text: str | None) -> str:
         """Reverse all tokens in text back to their real values."""
         if not text or not PII_MASKING_ENABLED:
             return "" if text is None else str(text)
@@ -161,22 +161,22 @@ class PIIVault:
 pii_vault = PIIVault()
 
 
-def mask_text(text: Optional[str]) -> str:
+def mask_text(text: str | None) -> str:
     """Detect PII and replace with canonical tokens."""
     return pii_vault.mask_text(text)
 
 
-def unmask_text(text: Optional[str]) -> str:
+def unmask_text(text: str | None) -> str:
     """Restore tokens back to original values."""
     return pii_vault.unmask_text(text)
 
 
-def register_pii(value: Optional[str], pii_type: str) -> str:
+def register_pii(value: str | None, pii_type: str) -> str:
     """Register a known real value into the vault."""
     return pii_vault.register(value, pii_type)
 
 
-def resolve_pii(text_or_token: Optional[str]) -> str:
+def resolve_pii(text_or_token: str | None) -> str:
     """Resolve token(s) back to real values for tool execution."""
     return pii_vault.resolve(text_or_token)
 
@@ -224,7 +224,7 @@ def _get_kms_client():
     return _kms_client
 
 
-def pseudonymize(value: Optional[str], key_id: Optional[str] = None) -> Optional[str]:
+def pseudonymize(value: str | None, key_id: str | None = None) -> str | None:
     """Return a deterministic, one-way pseudonym for a PII value.
 
     Args:
@@ -276,7 +276,7 @@ def pseudonymize(value: Optional[str], key_id: Optional[str] = None) -> Optional
     return None
 
 
-def pseudonymize_or_redact(value: Optional[str], redacted: str = "[REDACTED]") -> str:
+def pseudonymize_or_redact(value: str | None, redacted: str = "[REDACTED]") -> str:
     """Pseudonymize a value, falling back to a redaction marker.
 
     Convenience wrapper for logging filters / trace redactors where a plain
@@ -285,7 +285,7 @@ def pseudonymize_or_redact(value: Optional[str], redacted: str = "[REDACTED]") -
     return pseudonymize(value) or redacted
 
 
-def pseudonymize_text(text: Optional[str]) -> Optional[str]:
+def pseudonymize_text(text: str | None) -> str | None:
     """Replace detected PII spans in free text with one-way pseudonyms.
 
     Uses the same regex rules as mask_text, but each match is replaced with an

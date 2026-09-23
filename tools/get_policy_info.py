@@ -1,15 +1,12 @@
 import logging
-from datetime import date, datetime
-from decimal import Decimal
-from typing import Optional, List
-
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from sqlalchemy import func
 
-from data.db import SessionLocal
+from data.db import db_session
 from data.models import Customer, Policy, Claim
 from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
+from .helpers import safe
 
 from agent.pii import resolve_pii, register_pii, mask_text
 logger = logging.getLogger(__name__)
@@ -27,9 +24,9 @@ class PolicyDetail(BaseModel):
     premium_amount: float
     coverage_amount: float
     deductible: float = 0.0
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    description: Optional[str] = None
+    start_date: str | None = None
+    end_date: str | None = None
+    description: str | None = None
     customer_name: str
     active_claims_count: int = 0
 
@@ -38,21 +35,8 @@ class PolicyInfoOutput(BaseModel):
     """Response from get_policy_info tool."""
     success: bool = True
     message: str = ""
-    customer_name: Optional[str] = None
-    policies: List[PolicyDetail] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-
-def _safe(val):
-    """Convert date/Decimal to string/float for serialization."""
-    if isinstance(val, (date, datetime)):
-        return val.isoformat()
-    if isinstance(val, Decimal):
-        return float(val)
-    return val
+    customer_name: str | None = None
+    policies: list[PolicyDetail] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -62,10 +46,10 @@ def _safe(val):
 @tool
 @retry_on_db_error()
 def get_policy_info(
-    policy_number: Optional[str] = None,
-    customer_email: Optional[str] = None,
-    customer_phone: Optional[str] = None,
-    status_filter: Optional[str] = None,
+    policy_number: str | None = None,
+    customer_email: str | None = None,
+    customer_phone: str | None = None,
+    status_filter: str | None = None,
 ) -> str:
     """Look up insurance policy details for a customer.
 
@@ -83,113 +67,111 @@ def get_policy_info(
     At least one of policy_number, customer_email, or customer_phone must be provided.
     """
     output = PolicyInfoOutput(success=False, message="")
-    db = SessionLocal()
 
     # Resolve token if passed masked arg
     resolved_policy_num = resolve_pii(policy_number) if policy_number else None
     resolved_email = resolve_pii(customer_email) if customer_email else None
     resolved_phone = resolve_pii(customer_phone) if customer_phone else None
 
-    try:
-        query = db.query(Policy)
+    with db_session() as db:
+        try:
+            query = db.query(Policy)
 
-        if resolved_policy_num:
-            query = query.filter(
-                (Policy.policy_number == resolved_policy_num) | (Policy.policy_number == policy_number)
-            )
-        elif resolved_email:
-            query = (
-                query.join(Customer, Policy.customer_id == Customer.id)
-                .filter((Customer.email == resolved_email) | (Customer.email == customer_email))
-            )
-        elif resolved_phone:
-            query = (
-                query.join(Customer, Policy.customer_id == Customer.id)
-                .filter((Customer.phone == resolved_phone) | (Customer.phone == customer_phone))
-            )
-        else:
-            output.message = (
-                "Please provide a policy number, customer email, or phone number to look up."
-            )
-            return mask_text(output.model_dump_json())
-
-        if status_filter:
-            query = query.filter(Policy.status == status_filter.lower())
-
-        policies = query.order_by(Policy.start_date.desc()).all()
-
-        if not policies:
-            output.message = (
-                "No policies found matching the provided criteria. "
-                "Please verify the information and try again."
-            )
-            return mask_text(output.model_dump_json())
-
-        # Get the customer name from the first policy's customer
-        first_policy = policies[0]
-        customer = db.query(Customer).filter(Customer.id == first_policy.customer_id).first()
-        customer_name = customer.full_name if customer else "Unknown"
-
-        if customer:
-            register_pii(customer.full_name, "NAME")
-            register_pii(customer.first_name, "NAME")
-            register_pii(customer.last_name, "NAME")
-            register_pii(customer.email, "EMAIL")
-            if customer.phone:
-                register_pii(customer.phone, "PHONE")
-
-        output.customer_name = customer_name
-        output.success = True
-
-        for policy in policies:
-            register_pii(policy.policy_number, "POLICY_NO")
-
-            # Count active claims for this policy
-            active_claims = (
-                db.query(func.count(Claim.id))
-                .filter(
-                    Claim.policy_id == policy.id,
-                    Claim.status.in_(["submitted", "under_review", "approved"]),
+            if resolved_policy_num:
+                query = query.filter(
+                    (Policy.policy_number == resolved_policy_num) | (Policy.policy_number == policy_number)
                 )
-                .scalar()
+            elif resolved_email:
+                query = (
+                    query.join(Customer, Policy.customer_id == Customer.id)
+                    .filter((Customer.email == resolved_email) | (Customer.email == customer_email))
+                )
+            elif resolved_phone:
+                query = (
+                    query.join(Customer, Policy.customer_id == Customer.id)
+                    .filter((Customer.phone == resolved_phone) | (Customer.phone == customer_phone))
+                )
+            else:
+                output.message = (
+                    "Please provide a policy number, customer email, or phone number to look up."
+                )
+                return mask_text(output.model_dump_json())
+
+            if status_filter:
+                query = query.filter(Policy.status == status_filter.lower())
+
+            policies = query.order_by(Policy.start_date.desc()).all()
+
+            if not policies:
+                output.message = (
+                    "No policies found matching the provided criteria. "
+                    "Please verify the information and try again."
+                )
+                return mask_text(output.model_dump_json())
+
+            # Get the customer name from the first policy's customer
+            first_policy = policies[0]
+            customer = db.query(Customer).filter(Customer.id == first_policy.customer_id).first()
+            customer_name = customer.full_name if customer else "Unknown"
+
+            if customer:
+                register_pii(customer.full_name, "NAME")
+                register_pii(customer.first_name, "NAME")
+                register_pii(customer.last_name, "NAME")
+                register_pii(customer.email, "EMAIL")
+                if customer.phone:
+                    register_pii(customer.phone, "PHONE")
+
+            output.customer_name = customer_name
+            output.success = True
+
+            for policy in policies:
+                register_pii(policy.policy_number, "POLICY_NO")
+
+                # Count active claims for this policy
+                active_claims = (
+                    db.query(func.count(Claim.id))
+                    .filter(
+                        Claim.policy_id == policy.id,
+                        Claim.status.in_(["submitted", "under_review", "approved"]),
+                    )
+                    .scalar()
+                )
+
+                detail = PolicyDetail(
+                    policy_number=policy.policy_number,
+                    policy_type=str(policy.policy_type),
+                    status=str(policy.status),
+                    premium_amount=safe(policy.premium_amount),
+                    coverage_amount=safe(policy.coverage_amount),
+                    deductible=safe(policy.deductible),
+                    start_date=safe(policy.start_date),
+                    end_date=safe(policy.end_date),
+                    description=policy.description,
+                    customer_name=customer_name,
+                    active_claims_count=active_claims or 0,
+                )
+                output.policies.append(detail)
+
+            # Human-readable summary
+            parts = []
+            for p in output.policies:
+                parts.append(
+                    f"{p.policy_number}: {p.policy_type} — "
+                    f"Coverage ₹{p.coverage_amount:,.0f}, "
+                    f"Premium ₹{p.premium_amount:,.0f}, "
+                    f"Status: {p.status}"
+                )
+            output.message = (
+                f"Found {len(output.policies)} policy(ies) for {customer_name}. | "
+                + " | ".join(parts)
             )
 
-            detail = PolicyDetail(
-                policy_number=policy.policy_number,
-                policy_type=str(policy.policy_type),
-                status=str(policy.status),
-                premium_amount=_safe(policy.premium_amount),
-                coverage_amount=_safe(policy.coverage_amount),
-                deductible=_safe(policy.deductible),
-                start_date=_safe(policy.start_date),
-                end_date=_safe(policy.end_date),
-                description=policy.description,
-                customer_name=customer_name,
-                active_claims_count=active_claims or 0,
-            )
-            output.policies.append(detail)
-
-        # Human-readable summary
-        parts = []
-        for p in output.policies:
-            parts.append(
-                f"{p.policy_number}: {p.policy_type} — "
-                f"Coverage ₹{p.coverage_amount:,.0f}, "
-                f"Premium ₹{p.premium_amount:,.0f}, "
-                f"Status: {p.status}"
-            )
-        output.message = (
-            f"Found {len(output.policies)} policy(ies) for {customer_name}. | "
-            + " | ".join(parts)
-        )
-
-    except Exception as e:
-        if isinstance(e, RETRYABLE_EXCEPTIONS):
-            raise
-        logger.exception("Error querying policies")
-        output.message = f"Error while looking up policies: {str(e)}"
-        output.success = False
-    finally:
-        db.close()
+        except Exception as e:
+            if isinstance(e, RETRYABLE_EXCEPTIONS):
+                raise
+            logger.exception("Error querying policies")
+            output.message = "Error while looking up policies."
+            output.success = False
 
     return mask_text(output.model_dump_json())

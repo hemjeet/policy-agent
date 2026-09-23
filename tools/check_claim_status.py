@@ -1,14 +1,12 @@
 import logging
-from datetime import date, datetime
-from decimal import Decimal
-
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional
 from langchain_core.tools import tool
 
-from data.db import SessionLocal
+from data.db import db_session
 from data.models import Customer, Policy, Claim
 from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
+from .helpers import safe
 from agent.pii import resolve_pii, register_pii, mask_text
 logger = logging.getLogger(__name__)
 
@@ -40,7 +38,7 @@ class ClaimDetail(BaseModel):
     policy_number: str
     policy_type: str
     customer_name: str
-    history: List[ClaimStatusEntry] = Field(default_factory=list)
+    history: list[ClaimStatusEntry] = Field(default_factory=list)
 
 
 class ClaimStatusOutput(BaseModel):
@@ -48,20 +46,7 @@ class ClaimStatusOutput(BaseModel):
     success: bool = True
     message: str = ""
     customer_name: Optional[str] = None
-    claims: List[ClaimDetail] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-
-def _safe(val):
-    """Convert date/Decimal to string/float for serialization."""
-    if isinstance(val, (date, datetime)):
-        return val.isoformat()
-    if isinstance(val, Decimal):
-        return float(val)
-    return val
+    claims: list[ClaimDetail] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -81,101 +66,99 @@ def check_claim_status(phone_number: str) -> str:
         phone_number: The customer's registered phone number (e.g. '+91-9876543210').
     """
     output = ClaimStatusOutput(success=False, message="")
-    db = SessionLocal()
 
     # Resolve token if passed masked arg
     resolved_phone = resolve_pii(phone_number)
 
-    try:
-        # 1. Find the customer by phone number
-        customer = (
-            db.query(Customer)
-            .filter((Customer.phone == resolved_phone) | (Customer.phone == phone_number))
-            .first()
-        )
-
-        if not customer:
-            output.message = (
-                f"No customer found with phone number {phone_number}. "
-                "Please verify the number or ask for their claim number."
+    with db_session() as db:
+        try:
+            # 1. Find the customer by phone number
+            customer = (
+                db.query(Customer)
+                .filter((Customer.phone == resolved_phone) | (Customer.phone == phone_number))
+                .first()
             )
-            return mask_text(output.model_dump_json())
 
-        # Register customer PII in vault
-        register_pii(customer.phone, "PHONE")
-        register_pii(customer.full_name, "NAME")
-        register_pii(customer.first_name, "NAME")
-        register_pii(customer.last_name, "NAME")
-
-        output.customer_name = customer.full_name
-        output.success = True
-
-        # 2. Get all claims across all of the customer's policies
-        claims = (
-            db.query(Claim)
-            .join(Policy, Claim.policy_id == Policy.id)
-            .filter(Policy.customer_id == customer.id)
-            .order_by(Claim.filed_date.desc())
-            .all()
-        )
-
-        if not claims:
-            output.message = (
-                f"Customer {customer.full_name} found, but they have no claims on file."
-            )
-            return mask_text(output.model_dump_json())
-
-        # 3. Build the output for each claim
-        for claim in claims:
-            register_pii(claim.claim_number, "CLAIM_NO")
-            if claim.policy:
-                register_pii(claim.policy.policy_number, "POLICY_NO")
-
-            # The status_history relationship is already ordered by created_at
-            history = [
-                ClaimStatusEntry(
-                    old_status=str(h.old_status) if h.old_status else None,
-                    new_status=str(h.new_status),
-                    notes=h.notes,
-                    changed_by=h.changed_by,
-                    timestamp=_safe(h.created_at),
+            if not customer:
+                output.message = (
+                    f"No customer found with phone number {phone_number}. "
+                    "Please verify the number or ask for their claim number."
                 )
-                for h in claim.status_history
-            ]
+                return mask_text(output.model_dump_json())
 
-            detail = ClaimDetail(
-                claim_number=claim.claim_number,
-                status=str(claim.status),
-                claim_type=claim.claim_type,
-                claim_amount=_safe(claim.claim_amount),
-                approved_amount=_safe(claim.approved_amount),
-                description=claim.description,
-                incident_date=_safe(claim.incident_date),
-                filed_date=_safe(claim.filed_date),
-                resolved_date=_safe(claim.resolved_date),
-                policy_number=claim.policy.policy_number,
-                policy_type=str(claim.policy.policy_type),
-                customer_name=customer.full_name,
-                history=history,
+            # Register customer PII in vault
+            register_pii(customer.phone, "PHONE")
+            register_pii(customer.full_name, "NAME")
+            register_pii(customer.first_name, "NAME")
+            register_pii(customer.last_name, "NAME")
+
+            output.customer_name = customer.full_name
+            output.success = True
+
+            # 2. Get all claims across all of the customer's policies
+            claims = (
+                db.query(Claim)
+                .join(Policy, Claim.policy_id == Policy.id)
+                .filter(Policy.customer_id == customer.id)
+                .order_by(Claim.filed_date.desc())
+                .all()
             )
-            output.claims.append(detail)
 
-        # Human-readable summary for the LLM
-        output.message = (
-            f"Found {len(output.claims)} claim(s) for {customer.full_name}. "
-            + " | ".join(
-                f"{c.claim_number}: {c.status} (₹{c.claim_amount:,.0f})"
-                for c in output.claims
+            if not claims:
+                output.message = (
+                    f"Customer {customer.full_name} found, but they have no claims on file."
+                )
+                return mask_text(output.model_dump_json())
+
+            # 3. Build the output for each claim
+            for claim in claims:
+                register_pii(claim.claim_number, "CLAIM_NO")
+                if claim.policy:
+                    register_pii(claim.policy.policy_number, "POLICY_NO")
+
+                # The status_history relationship is already ordered by created_at
+                history = [
+                    ClaimStatusEntry(
+                        old_status=str(h.old_status) if h.old_status else None,
+                        new_status=str(h.new_status),
+                        notes=h.notes,
+                        changed_by=h.changed_by,
+                        timestamp=safe(h.created_at),
+                    )
+                    for h in claim.status_history
+                ]
+
+                detail = ClaimDetail(
+                    claim_number=claim.claim_number,
+                    status=str(claim.status),
+                    claim_type=claim.claim_type,
+                    claim_amount=safe(claim.claim_amount),
+                    approved_amount=safe(claim.approved_amount),
+                    description=claim.description,
+                    incident_date=safe(claim.incident_date),
+                    filed_date=safe(claim.filed_date),
+                    resolved_date=safe(claim.resolved_date),
+                    policy_number=claim.policy.policy_number,
+                    policy_type=str(claim.policy.policy_type),
+                    customer_name=customer.full_name,
+                    history=history,
+                )
+                output.claims.append(detail)
+
+            # Human-readable summary for the LLM
+            output.message = (
+                f"Found {len(output.claims)} claim(s) for {customer.full_name}. "
+                + " | ".join(
+                    f"{c.claim_number}: {c.status} (₹{c.claim_amount:,.0f})"
+                    for c in output.claims
+                )
             )
-        )
 
-    except Exception as e:
-        if isinstance(e, RETRYABLE_EXCEPTIONS):
-            raise
-        logger.exception("Error querying claims")
-        output.message = f"Error while looking up claims: {str(e)}"
-        output.success = False
-    finally:
-        db.close()
+        except Exception as e:
+            if isinstance(e, RETRYABLE_EXCEPTIONS):
+                raise
+            logger.exception("Error querying claims")
+            output.message = "Error while looking up claims."
+            output.success = False
 
     return mask_text(output.model_dump_json())

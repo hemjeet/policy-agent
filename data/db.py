@@ -31,3 +31,15 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+from contextlib import contextmanager
+
+@contextmanager
+def db_session():
+    """Context manager for tool DB access. Handles session lifecycle."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

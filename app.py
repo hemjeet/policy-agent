@@ -30,9 +30,13 @@ from slowapi.errors import RateLimitExceeded
 from agent import PolicyAgent
 from agent.runtime import build_llm, build_embeddings, build_vectorstore
 from agent.pii import mask_text, unmask_text, StreamingUnmasker, PIILogFilter
+from agent.semantic_cache import SemanticCache
+from openai import OpenAI as OpenAIClient
 import gradio as gr
 
 from gradio_ui import create_demo
+
+_RATE_LIMIT = os.getenv("RATE_LIMIT", "30/minute")
 
 
 # ── Logging ────────────────────────────────────────────────────────────
@@ -43,7 +47,10 @@ _has_file_handler = any(
     for h in logging.getLogger().handlers
 )
 if not _has_file_handler:
-    _file_handler = logging.FileHandler("agent.log", encoding="utf-8")
+    from logging.handlers import RotatingFileHandler
+    _file_handler = RotatingFileHandler(
+        "agent.log", encoding="utf-8", maxBytes=10 * 1024 * 1024, backupCount=5
+    )
     _file_handler.setLevel(logging.DEBUG)
     _file_handler.setFormatter(_log_fmt)
     logging.getLogger().addHandler(_file_handler)
@@ -126,51 +133,47 @@ async def lifespan(app: FastAPI):
     if not postgres_uri:
         logger.warning("  [SKIP] POSTGRES_URI not set - vectorstore disabled")
 
-    # 4. Agent graph
+    # 4. Semantic cache (validates kb_cache table + embedding service)
+    _openai_client = OpenAIClient(api_key=os.getenv("OPENAI_API_KEY"))
+    cache = SemanticCache(openai_client=_openai_client)
     if postgres_uri:
         try:
-            async with AsyncPostgresSaver.from_conn_string(postgres_uri) as checkpointer:
-                await checkpointer.setup()
+            cache.check_health()
+        except RuntimeError as e:
+            logger.warning("  [SKIP] Semantic cache unavailable: %s", e)
+            cache = None
 
-                agent = PolicyAgent(
-                    llm=llm,
-                    router_llm=router_llm,
-                    checkpointer=checkpointer,
-                )
-                graph = agent.graph
-                logger.info("  [ OK ] Agent graph compiled (Postgres checkpointer)")
-
-                app.state.graph = graph
-                app.state.vectorstore = vectorstore
-
-                elapsed = time.perf_counter() - t0
-                logger.info("─" * 56)
-                logger.info("  Startup complete (%.2fs)", elapsed)
-                logger.info("─" * 56)
-                yield
+    # 5. Checkpointer + Agent graph
+    _pg_ctx = None
+    if postgres_uri:
+        try:
+            _pg_ctx = AsyncPostgresSaver.from_conn_string(postgres_uri)
+            checkpointer = await _pg_ctx.__aenter__()
+            await checkpointer.setup()
+            logger.info("  [ OK ] Agent graph compiled (Postgres checkpointer)")
         except Exception as e:
             logger.error("  [FAIL] Postgres/connection error: %s", e)
             raise
     else:
         logger.warning("  [SKIP] POSTGRES_URI not set — using in-memory checkpointer")
-        agent = PolicyAgent(
-            llm=llm,
-            router_llm=router_llm,
-            checkpointer=MemorySaver(),
-        )
-        graph = agent.graph
+        checkpointer = MemorySaver()
         logger.info("  [ OK ] Agent graph compiled (in-memory checkpointer)")
 
-        app.state.graph = graph
-        app.state.vectorstore = vectorstore
+    agent = PolicyAgent(llm=llm, router_llm=router_llm, checkpointer=checkpointer, cache=cache)
+    app.state.graph = agent.graph
+    app.state.vectorstore = vectorstore
+    app.state.cache = cache
 
-        elapsed = time.perf_counter() - t0
-        logger.info("─" * 56)
-        logger.info("  Startup complete (%.2fs)", elapsed)
-        logger.info("─" * 56)
-        yield
+    elapsed = time.perf_counter() - t0
+    logger.info("─" * 56)
+    logger.info("  Startup complete (%.2fs)", elapsed)
+    logger.info("─" * 56)
+
+    yield
 
     # Shutdown
+    if _pg_ctx:
+        await _pg_ctx.__aexit__(None, None, None)
     logger.info("─" * 56)
     logger.info("  Shutdown")
     logger.info("─" * 56)
@@ -232,7 +235,7 @@ def _resolve_thread_id(req_thread_id: str | None) -> str:
 
 # ── Chat endpoints ────────────────────────────────────────────────────
 @app.post("/chat", response_model=ChatResponse)
-@limiter.limit("30/minute")
+@limiter.limit(_RATE_LIMIT)
 async def chat(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)):
     thread_id = _resolve_thread_id(req.thread_id)
     config = _get_config(thread_id, app.state.vectorstore)
@@ -261,7 +264,7 @@ async def chat(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)
 
 
 @app.post("/chat/stream")
-@limiter.limit("30/minute")
+@limiter.limit(_RATE_LIMIT)
 async def chat_stream(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)):
     thread_id = _resolve_thread_id(req.thread_id)
     config = _get_config(thread_id, app.state.vectorstore)
@@ -289,9 +292,9 @@ async def chat_stream(request: Request, req: ChatRequest, _auth=Depends(verify_a
 
             logger.info("STREAM DONE thread=%s time=%.2fs", thread_id[:8], time.perf_counter() - t_start)
             yield "data: [DONE]\n\n"
-        except Exception as e:
+        except Exception:
             logger.exception("Stream error")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'error': 'An internal error occurred. Please try again.'})}\n\n"
 
     return StreamingResponse(
         event_stream(),
