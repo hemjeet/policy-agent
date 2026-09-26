@@ -247,7 +247,7 @@ async def chat(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)
         with using_session(session_id=thread_id):
             result = await asyncio.wait_for(
                 app.state.graph.ainvoke({"messages": [HumanMessage(content=masked_msg)]}, config),
-                timeout=60.0,
+                timeout=120.0,
             )
         logger.info("TIMING thread=%s ainvoke=%.2fs", thread_id[:8], time.perf_counter() - t_invoke)
     except asyncio.TimeoutError:

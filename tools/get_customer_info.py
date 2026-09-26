@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pydantic import BaseModel
 from langchain_core.tools import tool
@@ -9,6 +10,7 @@ from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
 from .helpers import safe
 
 from agent.pii import resolve_pii, register_pii, mask_text
+from agent.semaphores import DB_SEMAPHORE
 logger = logging.getLogger(__name__)
 
 
@@ -33,26 +35,12 @@ class CustomerInfoOutput(BaseModel):
     customer: CustomerProfile | None = None
 
 
-@tool
-@retry_on_db_error()
-def get_customer_info(
+def _get_customer_info_sync(
     email: str | None = None,
     phone: str | None = None,
     customer_id: str | None = None,
 ) -> str:
-    """Look up customer profile information.
-
-    Retrieves a customer's name, contact details, address, and summary
-    counts (total policies, active policies, total claims, pending claims).
-    Use this when you need to identify a customer or pull their profile.
-
-    Args:
-        email: The customer's registered email address.
-        phone: The customer's registered phone number.
-        customer_id: The customer's internal ID (UUID).
-
-    At least one of email, phone, or customer_id must be provided.
-    """
+    """Synchronous DB work for get_customer_info, run inside asyncio.to_thread."""
     output = CustomerInfoOutput(success=False, message="")
 
     # Resolve token if passed masked arg
@@ -158,3 +146,29 @@ def get_customer_info(
             output.success = False
 
     return mask_text(output.model_dump_json())
+
+
+@tool
+@retry_on_db_error()
+async def get_customer_info(
+    email: str | None = None,
+    phone: str | None = None,
+    customer_id: str | None = None,
+) -> str:
+    """Look up customer profile information.
+
+    Retrieves a customer's name, contact details, address, and summary
+    counts (total policies, active policies, total claims, pending claims).
+    Use this when you need to identify a customer or pull their profile.
+
+    Args:
+        email: The customer's registered email address.
+        phone: The customer's registered phone number.
+        customer_id: The customer's internal ID (UUID).
+
+    At least one of email, phone, or customer_id must be provided.
+    """
+    async with DB_SEMAPHORE:
+        return await asyncio.to_thread(
+            _get_customer_info_sync, email, phone, customer_id
+        )

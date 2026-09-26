@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
@@ -9,6 +10,7 @@ from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
 from .helpers import safe
 
 from agent.pii import resolve_pii, register_pii, mask_text
+from agent.semaphores import DB_SEMAPHORE
 logger = logging.getLogger(__name__)
 
 
@@ -43,29 +45,13 @@ class PolicyInfoOutput(BaseModel):
 # LangChain Tool
 # ---------------------------------------------------------------------------
 
-@tool
-@retry_on_db_error()
-def get_policy_info(
+def _get_policy_info_sync(
     policy_number: str | None = None,
     customer_email: str | None = None,
     customer_phone: str | None = None,
     status_filter: str | None = None,
 ) -> str:
-    """Look up insurance policy details for a customer.
-
-    Retrieves policy information including coverage amounts, premiums,
-    deductibles, validity dates, and active claims count. Use this when
-    a customer asks about their policy coverage, premium, expiry date,
-    or wants to see what policies they have.
-
-    Args:
-        policy_number: A specific policy number (e.g. 'POL-HLT-2024-001').
-        customer_email: The customer's registered email address.
-        customer_phone: The customer's registered phone number.
-        status_filter: Optional filter by status ('active', 'expired', 'cancelled', 'pending').
-
-    At least one of policy_number, customer_email, or customer_phone must be provided.
-    """
+    """Synchronous DB work for get_policy_info, run inside asyncio.to_thread."""
     output = PolicyInfoOutput(success=False, message="")
 
     # Resolve token if passed masked arg
@@ -175,3 +161,33 @@ def get_policy_info(
             output.success = False
 
     return mask_text(output.model_dump_json())
+
+
+@tool
+@retry_on_db_error()
+async def get_policy_info(
+    policy_number: str | None = None,
+    customer_email: str | None = None,
+    customer_phone: str | None = None,
+    status_filter: str | None = None,
+) -> str:
+    """Look up insurance policy details for a customer.
+
+    Retrieves policy information including coverage amounts, premiums,
+    deductibles, validity dates, and active claims count. Use this when
+    a customer asks about their policy coverage, premium, expiry date,
+    or wants to see what policies they have.
+
+    Args:
+        policy_number: A specific policy number (e.g. 'POL-HLT-2024-001').
+        customer_email: The customer's registered email address.
+        customer_phone: The customer's registered phone number.
+        status_filter: Optional filter by status ('active', 'expired', 'cancelled', 'pending').
+
+    At least one of policy_number, customer_email, or customer_phone must be provided.
+    """
+    async with DB_SEMAPHORE:
+        return await asyncio.to_thread(
+            _get_policy_info_sync,
+            policy_number, customer_email, customer_phone, status_filter,
+        )

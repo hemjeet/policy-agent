@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -8,6 +9,7 @@ from data.models import Customer, Policy, Claim
 from .retry import retry_on_db_error, RETRYABLE_EXCEPTIONS
 from .helpers import safe
 from agent.pii import resolve_pii, register_pii, mask_text
+from agent.semaphores import DB_SEMAPHORE
 logger = logging.getLogger(__name__)
 
 
@@ -53,18 +55,8 @@ class ClaimStatusOutput(BaseModel):
 # LangChain Tool
 # ---------------------------------------------------------------------------
 
-@tool
-@retry_on_db_error()
-def check_claim_status(phone_number: str) -> str:
-    """Look up all insurance claims for a customer by their registered phone number.
-
-    Returns each claim's current status, details, and full status-change history.
-    Use this when a customer asks about their claim status, claim timeline, or
-    wants to know what happened with their claim.
-
-    Args:
-        phone_number: The customer's registered phone number (e.g. '+91-9876543210').
-    """
+def _check_claim_status_sync(phone_number: str) -> str:
+    """Synchronous DB work for check_claim_status, run inside asyncio.to_thread."""
     output = ClaimStatusOutput(success=False, message="")
 
     # Resolve token if passed masked arg
@@ -162,3 +154,19 @@ def check_claim_status(phone_number: str) -> str:
             output.success = False
 
     return mask_text(output.model_dump_json())
+
+
+@tool
+@retry_on_db_error()
+async def check_claim_status(phone_number: str) -> str:
+    """Look up all insurance claims for a customer by their registered phone number.
+
+    Returns each claim's current status, details, and full status-change history.
+    Use this when a customer asks about their claim status, claim timeline, or
+    wants to know what happened with their claim.
+
+    Args:
+        phone_number: The customer's registered phone number (e.g. '+91-9876543210').
+    """
+    async with DB_SEMAPHORE:
+        return await asyncio.to_thread(_check_claim_status_sync, phone_number)

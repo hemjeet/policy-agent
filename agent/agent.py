@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from .config import SYSTEM_PROMPT, ROUTER_PROMPT, OUT_OF_SCOPE_RESPONSE, ALL_TOOLS
 from .state import PolicyAgentState
+from .semaphores import LLM_SEMAPHORE, ROUTER_LLM_SEMAPHORE
 
 logger = logging.getLogger(__name__)
 MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "4000"))
@@ -117,13 +118,15 @@ class PolicyAgent:
     )
     @llm_breaker
     async def _invoke_router_llm_with_retry(self, router_messages):
-        return await self.router_llm.ainvoke(
-            router_messages, config={"callbacks": []}
-        )
+        async with ROUTER_LLM_SEMAPHORE:
+            return await self.router_llm.ainvoke(
+                router_messages, config={"callbacks": []}
+            )
 
     @llm_breaker
     async def _invoke_llm_with_circuit_breaker(self, llm_with_tools, messages):
-        return await llm_with_tools.ainvoke(messages)
+        async with LLM_SEMAPHORE:
+            return await llm_with_tools.ainvoke(messages)
 
     async def _router_llm(self, state: PolicyAgentState) -> str:
         messages = state['messages']
@@ -177,7 +180,7 @@ class PolicyAgent:
                 return updates
 
             if intent == "KNOWLEDGE_BASE" and self.cache:
-                cached = await asyncio.to_thread(self.cache.lookup, messages[-1].content)
+                cached = await self.cache.lookup(messages[-1].content)
                 if cached:
                     updates['messages'] = AIMessage(content=cached)
                     updates['iteration_count'] = iteration_count
@@ -224,7 +227,7 @@ class PolicyAgent:
         if intent == "KNOWLEDGE_BASE" and self.cache and isinstance(response, AIMessage) and not has_tool_calls:
             for msg in reversed(messages):
                 if isinstance(msg, HumanMessage):
-                    await asyncio.to_thread(self.cache.store, msg.content, response.content)
+                    await self.cache.store(msg.content, response.content)
                     break
 
         updates['messages'] = response

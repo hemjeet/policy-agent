@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from langchain_core.tools import tool
 from .retry import retry_on_db_error
 from langchain_core.runnables.config import RunnableConfig
+from agent.semaphores import VECTORSTORE_SEMAPHORE
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +39,16 @@ async def search_knowledge_base(query: str, config: RunnableConfig, top_k: int =
                 error="Knowledge base is not available."
             ).model_dump_json()
 
-        logger.info("KB search vs_collection=%s vs_type=%s",
-                    getattr(vectorstore, 'collection_name', '?'),
-                    type(vectorstore).__name__)
-        if getattr(vectorstore, "async_mode", False) or getattr(vectorstore, "_async_engine", None) is not None:
-            results = await vectorstore.asimilarity_search(query, k=top_k)
-        elif hasattr(vectorstore, "similarity_search"):
-            results = await asyncio.to_thread(vectorstore.similarity_search, query, k=top_k)
-        else:
-            results = await vectorstore.asimilarity_search(query, k=top_k)
+        async with VECTORSTORE_SEMAPHORE:
+            logger.info("KB search vs_collection=%s vs_type=%s",
+                        getattr(vectorstore, 'collection_name', '?'),
+                        type(vectorstore).__name__)
+            if getattr(vectorstore, "async_mode", False) or getattr(vectorstore, "_async_engine", None) is not None:
+                results = await vectorstore.asimilarity_search(query, k=top_k)
+            elif hasattr(vectorstore, "similarity_search"):
+                results = await asyncio.to_thread(vectorstore.similarity_search, query, k=top_k)
+            else:
+                results = await vectorstore.asimilarity_search(query, k=top_k)
         logger.info("KB search query='%s' returned %d chunks", query[:80], len(results))
 
         if not results:
