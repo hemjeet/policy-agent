@@ -1,5 +1,5 @@
 """
-Gradio chat UI for the Policy Agent — calls FastAPI /chat and /chat/stream endpoints.
+Gradio chat UI for the Policy Agent — with OTP-based phone authentication.
 
 Can run standalone or be mounted inside FastAPI via gr.mount_gradio_app().
 """
@@ -16,20 +16,29 @@ CUSTOM_CSS = """
 .policy-header h1 { margin: 0; color: #1a56db; }
 .policy-header p  { margin: 0; color: #6b7280; }
 footer { display: none !important; }
+.login-container { max-width: 400px; margin: 2em auto; }
+.otp-status { padding: 0.5em; border-radius: 0.5em; text-align: center; }
 """
 
 
 def create_demo(api_base: str = "http://localhost:8000"):
-    """Build and return a Gradio Blocks app configured for the given API base URL."""
+    """Build and return a Gradio Blocks app with OTP login + chat."""
 
-    async def _stream_chat(message: str, thread_id: str):
+    # ── Chat helpers ──────────────────────────────────────────────────
+
+    async def _stream_chat(message: str, thread_id: str, token: str):
         full_response = ""
+        headers = {"Authorization": f"Bearer {token}"}
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             async with client.stream(
                 "POST",
                 f"{api_base}/chat/stream",
                 json={"message": message, "thread_id": thread_id},
+                headers=headers,
             ) as resp:
+                if resp.status_code == 401:
+                    yield "[Session expired. Please log in again.]"
+                    return
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -47,22 +56,102 @@ def create_demo(api_base: str = "http://localhost:8000"):
                     except json.JSONDecodeError:
                         pass
 
-    async def _batch_chat(message: str, thread_id: str):
+    async def _batch_chat(message: str, thread_id: str, token: str):
+        headers = {"Authorization": f"Bearer {token}"}
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.post(
                 f"{api_base}/chat",
                 json={"message": message, "thread_id": thread_id},
+                headers=headers,
             )
+            if resp.status_code == 401:
+                return "[Session expired. Please log in again.]", thread_id
             resp.raise_for_status()
             data = resp.json()
         return data["response"], data.get("thread_id", thread_id)
 
-    async def respond(
-        history: list[dict],
-        thread_id: str | None,
-        use_stream: bool,
-    ):
+    # ── Auth helpers ──────────────────────────────────────────────────
+
+    async def send_otp(phone: str):
+        """Request an OTP for the given phone number."""
+        if not phone or not phone.strip():
+            return "⚠️ Please enter your phone number.", "", gr.update(), gr.update()
+        phone = phone.strip()
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{api_base}/auth/send-otp",
+                    json={"phone": phone},
+                )
+                if resp.status_code == 404:
+                    return "❌ No customer found with this phone number.", "", gr.update(), gr.update()
+                if resp.status_code == 429:
+                    return "⚠️ Too many attempts. Please wait a minute.", "", gr.update(), gr.update()
+                resp.raise_for_status()
+                data = resp.json()
+                demo_otp = data.get("demo_otp", "")
+                return (
+                    f"✅ OTP sent! (Demo OTP: **{demo_otp}**)",
+                    "",
+                    gr.update(interactive=True),
+                    gr.update(interactive=True),
+                )
+        except httpx.ConnectError:
+            return f"❌ Cannot connect to API at `{api_base}`.", "", gr.update(), gr.update()
+        except Exception as e:
+            return f"❌ Error: {str(e)}", "", gr.update(), gr.update()
+
+    async def verify_and_login(phone: str, otp: str):
+        """Verify OTP and return the auth token + customer name."""
+        if not otp or not otp.strip():
+            return "⚠️ Please enter the OTP.", None, None, gr.update(visible=True), gr.update(visible=False), []
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{api_base}/auth/verify-otp",
+                    json={"phone": phone.strip(), "otp": otp.strip()},
+                )
+                if resp.status_code == 401:
+                    return "❌ Invalid or expired OTP. Try again.", None, None, gr.update(visible=True), gr.update(visible=False), []
+                if resp.status_code == 429:
+                    return "⚠️ Too many attempts. Please wait.", None, None, gr.update(visible=True), gr.update(visible=False), []
+                resp.raise_for_status()
+                data = resp.json()
+                token = data["access_token"]
+                name = data["customer_name"]
+                return (
+                    f"✅ Welcome, **{name}**!",
+                    token,
+                    name,
+                    gr.update(visible=False),  # hide login
+                    gr.update(visible=True),   # show chat
+                    [{"role": "assistant", "content": f"Hi **{name}**, how may I help you today?"}],
+                )
+        except Exception as e:
+            return f"❌ Error: {str(e)}", None, None, gr.update(visible=True), gr.update(visible=False), []
+
+    def logout():
+        """Clear session and show login screen."""
+        return (
+            None,   # token
+            None,   # customer_name
+            [],     # chatbot
+            None,   # thread_state
+            "",     # phone
+            "",     # otp
+            "",     # status
+            gr.update(visible=True),   # login
+            gr.update(visible=False),  # chat
+        )
+
+    # ── Chat handler ──────────────────────────────────────────────────
+
+    async def respond(history, thread_id, use_stream, token):
         if not history:
+            return
+        if not token:
+            history.append({"role": "assistant", "content": "⚠️ Session expired. Please log in again."})
+            yield history, thread_id
             return
 
         messages = list(history)
@@ -78,11 +167,11 @@ def create_demo(api_base: str = "http://localhost:8000"):
         try:
             if use_stream:
                 messages.append({"role": "assistant", "content": ""})
-                async for partial in _stream_chat(user_message, tid):
+                async for partial in _stream_chat(user_message, tid, token):
                     messages[-1] = {"role": "assistant", "content": partial}
                     yield list(messages), tid
             else:
-                answer, tid = await _batch_chat(user_message, tid)
+                answer, tid = await _batch_chat(user_message, tid, token)
                 messages.append({"role": "assistant", "content": answer})
                 yield messages, tid
         except httpx.HTTPStatusError as e:
@@ -100,11 +189,16 @@ def create_demo(api_base: str = "http://localhost:8000"):
             messages.append({"role": "assistant", "content": f"**Unexpected error**: {str(e)}"})
             yield messages, tid
 
+    # ── Build UI ──────────────────────────────────────────────────────
+
     with gr.Blocks(
         title="SecureLife Insurance — Policy Agent",
         css=CUSTOM_CSS,
         theme=gr.themes.Soft(primary_hue="blue"),
     ) as demo:
+        # Session state
+        token_state = gr.State(None)
+        customer_name_state = gr.State(None)
         thread_state = gr.State(None)
 
         gr.HTML(
@@ -116,32 +210,62 @@ def create_demo(api_base: str = "http://localhost:8000"):
             """
         )
 
-        chatbot = gr.Chatbot(
-            label="Policy Agent",
-            placeholder="<strong>Examples:</strong><br>"
-            "&bull; &nbsp;<em>How do I file a health insurance claim?</em><br>"
-            "&bull; &nbsp;<em>What is No Claim Bonus?</em><br>"
-            "&bull; &nbsp;<em>Is my health insurance premium tax deductible?</em><br>"
-            "&bull; &nbsp;<em>What documents do I need for a motor claim?</em>",
-            height=520,
-            type="messages",
-            show_copy_button=True,
+        # ── Login Section ─────────────────────────────────────────────
+        with gr.Column(visible=True, elem_classes="login-container") as login_section:
+            gr.Markdown("### 🔐 Login with your registered phone number")
+            phone_input = gr.Textbox(
+                placeholder="+91-9876543210",
+                label="Phone Number",
+                scale=1,
+            )
+            send_otp_btn = gr.Button("Send OTP", variant="primary")
+            otp_input = gr.Textbox(
+                placeholder="Enter 6-digit OTP",
+                label="OTP",
+                interactive=False,
+            )
+            verify_btn = gr.Button("Verify & Login", variant="primary", interactive=False)
+            login_status = gr.Markdown("")
+
+        # ── Chat Section (hidden until login) ─────────────────────────
+        with gr.Column(visible=False) as chat_section:
+            chatbot = gr.Chatbot(
+                label="Policy Agent",
+                placeholder="<strong>You're logged in!</strong> Ask about your claims, policies, or coverage.",
+                height=520,
+                type="messages",
+                show_copy_button=True,
+            )
+
+            with gr.Row():
+                msg = gr.Textbox(
+                    placeholder="Type your question here…",
+                    label="Message",
+                    scale=8,
+                    show_label=False,
+                )
+
+            with gr.Row():
+                stream_toggle = gr.Checkbox(
+                    label="Stream response", value=True, scale=1
+                )
+                clear_btn = gr.Button("New Chat", variant="secondary", scale=1)
+                logout_btn = gr.Button("Logout", variant="stop", scale=1)
+
+        # ── Event wiring: Login ───────────────────────────────────────
+        send_otp_btn.click(
+            fn=send_otp,
+            inputs=[phone_input],
+            outputs=[login_status, otp_input, otp_input, verify_btn],
         )
 
-        with gr.Row():
-            msg = gr.Textbox(
-                placeholder="Type your question here…",
-                label="Message",
-                scale=8,
-                show_label=False,
-            )
+        verify_btn.click(
+            fn=verify_and_login,
+            inputs=[phone_input, otp_input],
+            outputs=[login_status, token_state, customer_name_state, login_section, chat_section, chatbot],
+        )
 
-        with gr.Row():
-            stream_toggle = gr.Checkbox(
-                label="Stream response", value=True, scale=1
-            )
-            clear_btn = gr.Button("New Chat", variant="secondary", scale=1)
-
+        # ── Event wiring: Chat ────────────────────────────────────────
         msg.submit(
             fn=lambda m, h: ((h or []) + [{"role": "user", "content": m}], ""),
             inputs=[msg, chatbot],
@@ -149,13 +273,22 @@ def create_demo(api_base: str = "http://localhost:8000"):
             queue=False,
         ).then(
             fn=respond,
-            inputs=[chatbot, thread_state, stream_toggle],
+            inputs=[chatbot, thread_state, stream_toggle, token_state],
             outputs=[chatbot, thread_state],
         )
 
         clear_btn.click(
             fn=lambda: ([], None),
             outputs=[chatbot, thread_state],
+        )
+
+        logout_btn.click(
+            fn=logout,
+            outputs=[
+                token_state, customer_name_state, chatbot, thread_state,
+                phone_input, otp_input, login_status,
+                login_section, chat_section,
+            ],
         )
 
     return demo

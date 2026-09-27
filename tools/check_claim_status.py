@@ -1,8 +1,9 @@
 import asyncio
 import logging
+from typing import Annotated, Optional
 from pydantic import BaseModel, Field
 from typing import Optional
-from langchain_core.tools import tool
+from langchain_core.tools import tool, InjectedToolArg
 
 from data.db import db_session
 from data.models import Customer, Policy, Claim
@@ -55,7 +56,7 @@ class ClaimStatusOutput(BaseModel):
 # LangChain Tool
 # ---------------------------------------------------------------------------
 
-def _check_claim_status_sync(phone_number: str) -> str:
+def _check_claim_status_sync(phone_number: str, customer_id: str | None = None) -> str:
     """Synchronous DB work for check_claim_status, run inside asyncio.to_thread."""
     output = ClaimStatusOutput(success=False, message="")
 
@@ -65,11 +66,13 @@ def _check_claim_status_sync(phone_number: str) -> str:
     with db_session() as db:
         try:
             # 1. Find the customer by phone number
-            customer = (
-                db.query(Customer)
-                .filter((Customer.phone == resolved_phone) | (Customer.phone == phone_number))
-                .first()
+            query = db.query(Customer).filter(
+                (Customer.phone == resolved_phone) | (Customer.phone == phone_number)
             )
+            # Scope to authenticated user if customer_id is provided
+            if customer_id:
+                query = query.filter(Customer.id == customer_id)
+            customer = query.first()
 
             if not customer:
                 output.message = (
@@ -158,7 +161,10 @@ def _check_claim_status_sync(phone_number: str) -> str:
 
 @tool
 @retry_on_db_error()
-async def check_claim_status(phone_number: str) -> str:
+async def check_claim_status(
+    phone_number: str,
+    customer_id: Annotated[str | None, InjectedToolArg] = None,
+) -> str:
     """Look up all insurance claims for a customer by their registered phone number.
 
     Returns each claim's current status, details, and full status-change history.
@@ -169,4 +175,4 @@ async def check_claim_status(phone_number: str) -> str:
         phone_number: The customer's registered phone number (e.g. '+91-9876543210').
     """
     async with DB_SEMAPHORE:
-        return await asyncio.to_thread(_check_claim_status_sync, phone_number)
+        return await asyncio.to_thread(_check_claim_status_sync, phone_number, customer_id)

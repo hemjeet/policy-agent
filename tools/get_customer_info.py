@@ -1,7 +1,8 @@
 import asyncio
 import logging
+from typing import Annotated
 from pydantic import BaseModel
-from langchain_core.tools import tool
+from langchain_core.tools import tool, InjectedToolArg
 from sqlalchemy import func
 
 from data.db import db_session
@@ -39,6 +40,7 @@ def _get_customer_info_sync(
     email: str | None = None,
     phone: str | None = None,
     customer_id: str | None = None,
+    auth_customer_id: str | None = None,
 ) -> str:
     """Synchronous DB work for get_customer_info, run inside asyncio.to_thread."""
     output = CustomerInfoOutput(success=False, message="")
@@ -52,7 +54,10 @@ def _get_customer_info_sync(
         try:
             query = db.query(Customer)
 
-            if resolved_email:
+            # If authenticated, scope to the user's own record
+            if auth_customer_id:
+                query = query.filter(Customer.id == auth_customer_id)
+            elif resolved_email:
                 query = query.filter((Customer.email == resolved_email) | (Customer.email == email))
             elif resolved_phone:
                 query = query.filter((Customer.phone == resolved_phone) | (Customer.phone == phone))
@@ -154,6 +159,7 @@ async def get_customer_info(
     email: str | None = None,
     phone: str | None = None,
     customer_id: str | None = None,
+    auth_customer_id: Annotated[str | None, InjectedToolArg] = None,
 ) -> str:
     """Look up customer profile information.
 
@@ -170,5 +176,5 @@ async def get_customer_info(
     """
     async with DB_SEMAPHORE:
         return await asyncio.to_thread(
-            _get_customer_info_sync, email, phone, customer_id
+            _get_customer_info_sync, email, phone, customer_id, auth_customer_id
         )

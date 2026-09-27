@@ -31,9 +31,15 @@ from agent import PolicyAgent
 from agent.runtime import build_llm, build_embeddings, build_vectorstore
 from agent.pii import mask_text, unmask_text, StreamingUnmasker, PIILogFilter
 from agent.semantic_cache import SemanticCache
+from agent.auth import (
+    generate_otp, store_otp, verify_otp as verify_otp_code,
+    create_token, decode_token,
+)
 from openai import OpenAI as OpenAIClient
 import gradio as gr
 
+from data.db import db_session
+from data.models import Customer
 from gradio_ui import create_demo
 
 _RATE_LIMIT = os.getenv("RATE_LIMIT", "30/minute")
@@ -69,19 +75,20 @@ logger = logging.getLogger(__name__)
 
 
 # ── Authentication ─────────────────────────────────────────────────────
-API_KEY = os.getenv("API_KEY")
 security = HTTPBearer(auto_error=False)
 
 
-async def verify_api_key(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
-    """Validate API key if API_KEY is configured. Skipped if not set."""
-    if API_KEY is None:
-        return  # auth disabled — no key required
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> dict:
+    """Decode JWT and return user payload {sub, phone, name}."""
     if credentials is None:
-        raise HTTPException(401, detail="API key required. Provide Authorization: Bearer <key>")
-    if credentials.credentials != API_KEY:
-        raise HTTPException(403, detail="Invalid API key")
-    return credentials
+        raise HTTPException(401, detail="Authentication required. Please log in.")
+    try:
+        payload = decode_token(credentials.credentials)
+        return payload
+    except Exception:
+        raise HTTPException(401, detail="Invalid or expired token. Please log in again.")
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────
@@ -108,6 +115,15 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     thread_id: str
+
+
+class OTPRequest(BaseModel):
+    phone: str = Field(..., min_length=5, description="Customer's registered phone number")
+
+
+class OTPVerifyRequest(BaseModel):
+    phone: str = Field(..., min_length=5)
+    otp: str = Field(..., min_length=4, max_length=8)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────
@@ -179,7 +195,7 @@ async def lifespan(app: FastAPI):
     logger.info("─" * 56)
 
 
-# ── FastAPI app ───────────────────────────────────────────────────────
+# ── FastAPI app ────────────────────────────────────────────────────────
 _DEFAULT_ORIGINS = "http://localhost:3000,http://localhost:8000"
 
 app = FastAPI(
@@ -223,8 +239,15 @@ async def health():
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
-def _get_config(thread_id: str, vectorstore) -> dict:
-    return {"configurable": {"thread_id": thread_id, "vectorstore": vectorstore}}
+def _get_config(thread_id: str, vectorstore, customer_id: str | None = None, customer_phone: str | None = None, customer_name: str | None = None) -> dict:
+    cfg = {"thread_id": thread_id, "vectorstore": vectorstore}
+    if customer_id:
+        cfg["customer_id"] = customer_id
+    if customer_phone:
+        cfg["customer_phone"] = customer_phone
+    if customer_name:
+        cfg["customer_name"] = customer_name
+    return {"configurable": cfg}
 
 
 def _resolve_thread_id(req_thread_id: str | None) -> str:
@@ -233,12 +256,67 @@ def _resolve_thread_id(req_thread_id: str | None) -> str:
     return str(uuid.uuid4())
 
 
+# ── Auth endpoints ────────────────────────────────────────────────────
+@app.post("/auth/send-otp")
+@limiter.limit("5/minute")
+async def send_otp(request: Request, req: OTPRequest):
+    """Send OTP to the registered phone number (demo: OTP is returned in response)."""
+    phone = req.phone.strip()
+
+    # Check if customer exists with this phone
+    with db_session() as db:
+        customer = db.query(Customer).filter(Customer.phone == phone).first()
+        if not customer:
+            raise HTTPException(404, detail="No customer found with this phone number.")
+
+    otp = generate_otp()
+    store_otp(phone, otp)
+    logger.info("OTP generated for %s: %s", phone[:6] + "****", otp)
+
+    # Demo mode: return OTP in response for testing
+    return {
+        "message": "OTP sent successfully",
+        "expires_in": 300,
+        "demo_otp": otp,  # Remove this in production!
+    }
+
+
+@app.post("/auth/verify-otp")
+@limiter.limit("5/minute")
+async def verify_otp_endpoint(request: Request, req: OTPVerifyRequest):
+    """Verify OTP and issue a JWT token."""
+    phone = req.phone.strip()
+
+    if not verify_otp_code(phone, req.otp):
+        raise HTTPException(401, detail="Invalid or expired OTP. Please try again.")
+
+    # Fetch customer for the JWT payload
+    with db_session() as db:
+        customer = db.query(Customer).filter(Customer.phone == phone).first()
+        if not customer:
+            raise HTTPException(404, detail="Customer not found.")
+        customer_id = str(customer.id)
+        customer_name = customer.full_name
+
+    token = create_token(customer_id, phone, customer_name)
+    logger.info("JWT issued for customer %s (%s)", customer_name, phone[:6] + "****")
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "customer_name": customer_name,
+    }
+
+
 # ── Chat endpoints ────────────────────────────────────────────────────
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit(_RATE_LIMIT)
-async def chat(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)):
+async def chat(request: Request, req: ChatRequest, user: dict = Depends(get_current_user)):
+    customer_id = user["sub"]
     thread_id = _resolve_thread_id(req.thread_id)
-    config = _get_config(thread_id, app.state.vectorstore)
+    # Namespace thread to the user so conversations are isolated
+    scoped_thread = f"{customer_id}:{thread_id}"
+    config = _get_config(scoped_thread, app.state.vectorstore, customer_id=customer_id, customer_phone=user.get("phone"), customer_name=user.get("name"))
 
     masked_msg = mask_text(req.message)
 
@@ -249,7 +327,7 @@ async def chat(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)
                 app.state.graph.ainvoke({"messages": [HumanMessage(content=masked_msg)]}, config),
                 timeout=120.0,
             )
-        logger.info("TIMING thread=%s ainvoke=%.2fs", thread_id[:8], time.perf_counter() - t_invoke)
+        logger.info("TIMING thread=%s ainvoke=%.2fs", scoped_thread[:8], time.perf_counter() - t_invoke)
     except asyncio.TimeoutError:
         raise HTTPException(504, detail="Request timed out. Please try again.")
     except Exception:
@@ -265,9 +343,11 @@ async def chat(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)
 
 @app.post("/chat/stream")
 @limiter.limit(_RATE_LIMIT)
-async def chat_stream(request: Request, req: ChatRequest, _auth=Depends(verify_api_key)):
+async def chat_stream(request: Request, req: ChatRequest, user: dict = Depends(get_current_user)):
+    customer_id = user["sub"]
     thread_id = _resolve_thread_id(req.thread_id)
-    config = _get_config(thread_id, app.state.vectorstore)
+    scoped_thread = f"{customer_id}:{thread_id}"
+    config = _get_config(scoped_thread, app.state.vectorstore, customer_id=customer_id, customer_phone=user.get("phone"), customer_name=user.get("name"))
 
     masked_msg = mask_text(req.message)
     input_msg = HumanMessage(content=masked_msg)

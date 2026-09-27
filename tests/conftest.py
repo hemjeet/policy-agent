@@ -39,6 +39,18 @@ def mock_graph_stream():
 
 
 @pytest.fixture
+def auth_headers():
+    """Generate a valid JWT for test requests."""
+    from agent.auth import create_token
+    token = create_token(
+        customer_id="00000000-0000-0000-0000-000000000001",
+        phone="+91-0000000000",
+        customer_name="Test User",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
 def client(mock_graph, mock_graph_stream):
     """
     Create a FastAPI TestClient with mocked app.state.
@@ -65,5 +77,16 @@ def client(mock_graph, mock_graph_stream):
         app_module.app.state.graph = mock_graph
         app_module.app.state.vectorstore = MagicMock()
 
+        # Override auth dependency so chat tests don't need a real JWT
+        from app import get_current_user
+        app_module.app.dependency_overrides[get_current_user] = lambda: {
+            "sub": "test-user-id",
+            "phone": "+91-0000000000",
+            "name": "Test User",
+        }
+
         with TestClient(app_module.app) as test_client:
             yield test_client
+
+        # Clean up overrides
+        app_module.app.dependency_overrides.clear()

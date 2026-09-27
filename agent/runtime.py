@@ -34,9 +34,10 @@ def build_llm():
     logger.info("  [ OK ] DeepSeek LLM loaded (%s)", os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"))
 
     fallback = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    router = ChatAnthropic(
-        model="claude-haiku-4-5-20251001",
-        api_key=os.getenv("CLAUDE_API_KEY"),
+    router = ChatOpenAI(
+        model="qwen/qwen3.8-27b",
+        api_key=os.getenv("GROQ_API_KEY"),
+        base_url="https://api.groq.com/openai/v1"
     )
 
     llm = primary.with_fallbacks([fallback])
@@ -74,3 +75,4 @@ def build_judge_llm():
         model=os.getenv("JUDGE_MODEL", "gpt-4o"),
         temperature=0,
     )
+

@@ -7,6 +7,7 @@ from langchain_core.messages import (
     AIMessage, HumanMessage, SystemMessage, BaseMessage,
 )
 from langgraph.graph import StateGraph, START, END
+from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt.tool_node import ToolNode
 import httpx
 import tiktoken
@@ -15,6 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from datetime import timedelta
 
 from .config import SYSTEM_PROMPT, ROUTER_PROMPT, OUT_OF_SCOPE_RESPONSE, ALL_TOOLS
+from .pii import register_pii
 from .state import PolicyAgentState
 from .semaphores import LLM_SEMAPHORE, ROUTER_LLM_SEMAPHORE
 
@@ -57,6 +59,7 @@ def _count_tokens(messages: list[BaseMessage]) -> int:
 
 def _trim_context(messages: list[BaseMessage]) -> list[BaseMessage]:
     """Trim conversation to fit within MAX_CONTEXT_TOKENS, keeping most recent messages."""
+
     if _count_tokens(messages) <= MAX_CONTEXT_TOKENS:
         return messages
 
@@ -120,7 +123,7 @@ class PolicyAgent:
     async def _invoke_router_llm_with_retry(self, router_messages):
         async with ROUTER_LLM_SEMAPHORE:
             return await self.router_llm.ainvoke(
-                router_messages, config={"callbacks": []}
+                router_messages, config={"run_name": "router_llm"}
             )
 
     @llm_breaker
@@ -128,7 +131,8 @@ class PolicyAgent:
         async with LLM_SEMAPHORE:
             return await llm_with_tools.ainvoke(messages)
 
-    async def _router_llm(self, state: PolicyAgentState) -> str:
+    async def _route_intent(self, state: PolicyAgentState, config: RunnableConfig):
+        """Separate graph node: classify user intent via the router LLM."""
         messages = state['messages']
         last_human_message = None
         for msg in reversed(messages):
@@ -137,13 +141,20 @@ class PolicyAgent:
                 break
 
         if not last_human_message:
-            return "TRANSACTIONAL"
+            return {"intent": "TRANSACTIONAL"}
+
+        configurable = config.get("configurable", {})
+        customer_phone = configurable.get("customer_phone")
 
         try:
             router_messages = [
                 SystemMessage(content=ROUTER_PROMPT),
-                HumanMessage(content=f"Classify this query: {last_human_message.content}")
             ]
+            if customer_phone:
+                router_messages.append(SystemMessage(content="Context: The user is already authenticated and their identity is known. If they ask to check their own claims, policies, or account details, classify as TRANSACTIONAL even if they don't provide a phone number or email in the query."))
+            
+            router_messages.append(HumanMessage(content=f"Classify this query: {last_human_message.content}"))
+            
             response = await self._invoke_router_llm_with_retry(router_messages)
 
             content = response.content.strip()
@@ -153,26 +164,26 @@ class PolicyAgent:
             data = json.loads(content)
             intent = data.get("intent", "TRANSACTIONAL").upper()
             if "MIXED" in intent:
-                return "MIXED"
+                return {"intent": "MIXED"}
             if "KNOWLEDGE" in intent:
-                return "KNOWLEDGE_BASE"
+                return {"intent": "KNOWLEDGE_BASE"}
             if "SCOPE" in intent or "OUT" in intent:
-                return "OUT_OF_SCOPE"
-            return "TRANSACTIONAL"
+                return {"intent": "OUT_OF_SCOPE"}
+            return {"intent": "TRANSACTIONAL"}
         except CircuitBreakerError:
             logger.error("Circuit breaker is open for router LLM. Defaulting to KNOWLEDGE_BASE.")
-            return "KNOWLEDGE_BASE"
+            return {"intent": "KNOWLEDGE_BASE"}
         except Exception as e:
             logger.warning(f"Failed to run router LLM after retries: {e}. Defaulting to KNOWLEDGE_BASE.")
-            return "KNOWLEDGE_BASE"
+            return {"intent": "KNOWLEDGE_BASE"}
 
-    async def _llm_call(self, state: PolicyAgentState):
+    async def _llm_call(self, state: PolicyAgentState, config: RunnableConfig):
         messages = state['messages']
         updates = {}
+        intent = state.get('intent', 'TRANSACTIONAL')
+
         if messages and isinstance(messages[-1], HumanMessage):
             iteration_count = 1
-            intent = await self._router_llm(state)
-            updates['intent'] = intent
 
             if intent == "OUT_OF_SCOPE":
                 updates['messages'] = AIMessage(content=OUT_OF_SCOPE_RESPONSE)
@@ -189,7 +200,6 @@ class PolicyAgent:
 
         else:
             iteration_count = state.get('iteration_count', 0) + 1
-            intent = state.get('intent', 'TRANSACTIONAL')
 
         force_stop = _force_stop(iteration_count)
         if force_stop:
@@ -199,10 +209,20 @@ class PolicyAgent:
 
         llm_with_tools = self.llm.bind_tools(tool_mode)
         trimmed_messages = _trim_context(messages)
+        configurable = config.get("configurable", {})
+        customer_phone = configurable.get("customer_phone")
+        customer_name = configurable.get("customer_name")
+        
+        system_prompt_content = SYSTEM_PROMPT
+        if customer_phone and customer_name:
+            masked_phone = register_pii(customer_phone, "PHONE")
+            masked_name = register_pii(customer_name, "NAME")
+            system_prompt_content += f"\n\n## Current User\nYou are speaking to {masked_name}. Their registered phone number is {masked_phone}.\nYou MUST use this phone number automatically when looking up their claims or policies. Do NOT ask them for their phone number again."
+
         try:
             response = await self._invoke_llm_with_circuit_breaker(
                 llm_with_tools,
-                [SystemMessage(content=SYSTEM_PROMPT), *trimmed_messages]
+                [SystemMessage(content=system_prompt_content), *trimmed_messages]
             )
         except CircuitBreakerError:
             updates['messages'] = AIMessage(
@@ -244,10 +264,13 @@ class PolicyAgent:
 
     def _build_graph(self):
         workflow = StateGraph(PolicyAgentState)
+        workflow.add_node('route_intent', self._route_intent)
         workflow.add_node('llm_call', self._llm_call)
         workflow.add_node('all_tools', ToolNode(ALL_TOOLS))
 
-        workflow.add_edge(START, 'llm_call')
+        # START → route_intent → llm_call → (tools loop or END)
+        workflow.add_edge(START, 'route_intent')
+        workflow.add_edge('route_intent', 'llm_call')
 
         workflow.add_conditional_edges(
             'llm_call',
@@ -258,6 +281,8 @@ class PolicyAgent:
             }
         )
 
+        # Tools loop back to llm_call (not route_intent — intent is already set)
         workflow.add_edge('all_tools', 'llm_call')
 
         return workflow.compile(checkpointer=self.checkpointer)
+

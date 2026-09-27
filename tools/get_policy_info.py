@@ -1,7 +1,8 @@
 import asyncio
 import logging
+from typing import Annotated
 from pydantic import BaseModel, Field
-from langchain_core.tools import tool
+from langchain_core.tools import tool, InjectedToolArg
 from sqlalchemy import func
 
 from data.db import db_session
@@ -50,6 +51,7 @@ def _get_policy_info_sync(
     customer_email: str | None = None,
     customer_phone: str | None = None,
     status_filter: str | None = None,
+    auth_customer_id: str | None = None,
 ) -> str:
     """Synchronous DB work for get_policy_info, run inside asyncio.to_thread."""
     output = PolicyInfoOutput(success=False, message="")
@@ -85,6 +87,10 @@ def _get_policy_info_sync(
 
             if status_filter:
                 query = query.filter(Policy.status == status_filter.lower())
+
+            # Scope to authenticated user if provided
+            if auth_customer_id:
+                query = query.filter(Policy.customer_id == auth_customer_id)
 
             policies = query.order_by(Policy.start_date.desc()).all()
 
@@ -170,6 +176,7 @@ async def get_policy_info(
     customer_email: str | None = None,
     customer_phone: str | None = None,
     status_filter: str | None = None,
+    auth_customer_id: Annotated[str | None, InjectedToolArg] = None,
 ) -> str:
     """Look up insurance policy details for a customer.
 
@@ -190,4 +197,5 @@ async def get_policy_info(
         return await asyncio.to_thread(
             _get_policy_info_sync,
             policy_number, customer_email, customer_phone, status_filter,
+            auth_customer_id,
         )
