@@ -10,7 +10,6 @@ import os
 import logging
 
 from langchain_deepseek import ChatDeepSeek
-from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,10 @@ def _to_async_url(url: str) -> str:
 
 
 def build_llm():
-    """Build the primary (DeepSeek) LLM with OpenAI fallback and the router LLM."""
+    """Build the primary (DeepSeek) LLM with OpenAI fallback.
+
+    Intent routing is handled by Jev (TypeSafe AI) — no router LLM needed.
+    """
     primary = ChatDeepSeek(
         model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         api_key=os.getenv("DEEPSEEK_API_KEY"),
@@ -34,16 +36,10 @@ def build_llm():
     logger.info("  [ OK ] DeepSeek LLM loaded (%s)", os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"))
 
     fallback = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    router = ChatOpenAI(
-        model="qwen/qwen3.8-27b",
-        api_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1"
-    )
-
     llm = primary.with_fallbacks([fallback])
     logger.info("  [ OK ] OpenAI fallback loaded (%s)", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    logger.info("  [ OK ] Router LLM loaded (%s)", os.getenv("ROUTER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")))
-    return llm, router
+    logger.info("  [ OK ] Intent router: Jev (TypeSafe AI)")
+    return llm
 
 
 def build_embeddings():

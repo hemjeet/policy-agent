@@ -2,7 +2,6 @@ import asyncio
 import logging
 from typing import Annotated, Optional
 from pydantic import BaseModel, Field
-from typing import Optional
 from langchain_core.tools import tool, InjectedToolArg
 
 from data.db import db_session

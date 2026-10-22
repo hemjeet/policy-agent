@@ -28,7 +28,6 @@ from agent.auth import (
     JWT_SECRET,
     JWT_ALGORITHM,
     OTP_LENGTH,
-    OTP_EXPIRY,
 )
 
 

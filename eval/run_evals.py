@@ -49,11 +49,10 @@ logger = logging.getLogger("eval_runner")
 
 class PolicyAgentEvaluator:
     def __init__(self):
-        self.llm, self.router_llm = build_llm()
+        self.llm = build_llm()
         self.judge_llm = build_judge_llm()
         self.checkpointer = MemorySaver()
         self.agent = PolicyAgent(
-            router_llm=self.router_llm,
             llm=self.llm,
             checkpointer=self.checkpointer,
         )
@@ -79,7 +78,8 @@ class PolicyAgentEvaluator:
 
             t0 = time.perf_counter()
             try:
-                predicted = await self.agent._router_llm(state)
+                res = await self.agent._route_intent(state, {})
+                predicted = res.get("intent", "KNOWLEDGE_BASE")
             except Exception as e:
                 predicted = f"ERROR: {e}"
             dur = time.perf_counter() - t0

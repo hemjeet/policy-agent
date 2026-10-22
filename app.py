@@ -139,7 +139,7 @@ async def lifespan(app: FastAPI):
     embeddings = build_embeddings()
 
     # 1. LLM
-    llm, router_llm = build_llm()
+    llm = build_llm()
 
     # 2. Arize tracing
     _tracer_provider = setup_tracing()
@@ -175,7 +175,7 @@ async def lifespan(app: FastAPI):
         checkpointer = MemorySaver()
         logger.info("  [ OK ] Agent graph compiled (in-memory checkpointer)")
 
-    agent = PolicyAgent(llm=llm, router_llm=router_llm, checkpointer=checkpointer, cache=cache)
+    agent = PolicyAgent(llm=llm, checkpointer=checkpointer, cache=cache)
     app.state.graph = agent.graph
     app.state.vectorstore = vectorstore
     app.state.cache = cache
@@ -239,7 +239,13 @@ async def health():
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
-def _get_config(thread_id: str, vectorstore, customer_id: str | None = None, customer_phone: str | None = None, customer_name: str | None = None) -> dict:
+def _get_config(
+    thread_id: str,
+    vectorstore,
+    customer_id: str | None = None,
+    customer_phone: str | None = None,
+    customer_name: str | None = None,
+) -> dict:
     cfg = {"thread_id": thread_id, "vectorstore": vectorstore}
     if customer_id:
         cfg["customer_id"] = customer_id
@@ -316,7 +322,12 @@ async def chat(request: Request, req: ChatRequest, user: dict = Depends(get_curr
     thread_id = _resolve_thread_id(req.thread_id)
     # Namespace thread to the user so conversations are isolated
     scoped_thread = f"{customer_id}:{thread_id}"
-    config = _get_config(scoped_thread, app.state.vectorstore, customer_id=customer_id, customer_phone=user.get("phone"), customer_name=user.get("name"))
+    config = _get_config(
+        scoped_thread, app.state.vectorstore,
+        customer_id=customer_id,
+        customer_phone=user.get("phone"),
+        customer_name=user.get("name"),
+    )
 
     masked_msg = mask_text(req.message)
 
@@ -347,7 +358,12 @@ async def chat_stream(request: Request, req: ChatRequest, user: dict = Depends(g
     customer_id = user["sub"]
     thread_id = _resolve_thread_id(req.thread_id)
     scoped_thread = f"{customer_id}:{thread_id}"
-    config = _get_config(scoped_thread, app.state.vectorstore, customer_id=customer_id, customer_phone=user.get("phone"), customer_name=user.get("name"))
+    config = _get_config(
+        scoped_thread, app.state.vectorstore,
+        customer_id=customer_id,
+        customer_phone=user.get("phone"),
+        customer_name=user.get("name"),
+    )
 
     masked_msg = mask_text(req.message)
     input_msg = HumanMessage(content=masked_msg)

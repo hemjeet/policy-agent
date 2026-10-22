@@ -119,7 +119,6 @@ class TestPolicyAgentState:
 
     def test_state_has_required_keys(self):
         expected_keys = {
-            "messages", "phone_number", "email", "customer_id",
-            "policy_id", "claim_id", "iteration_count", "intent", "cached_hit",
+            "messages", "iteration_count", "intent", "cached_hit",
         }
         assert set(PolicyAgentState.__annotations__.keys()) == expected_keys

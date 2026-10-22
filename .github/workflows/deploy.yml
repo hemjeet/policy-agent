@@ -83,6 +83,7 @@ jobs:
             -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
             -e DEEPSEEK_API_KEY="${{ secrets.DEEPSEEK_API_KEY }}" \
             -e CLAUDE_API_KEY="${{ secrets.CLAUDE_API_KEY }}" \
+            -e TYPESAFE_API_KEY="${{ secrets.TYPESAFE_API_KEY }}" \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             -e POSTGRES_URI="${{ secrets.POSTGRES_URI }}" \
             -e EVAL_ROUTER_MIN_ACCURACY=90.0 \

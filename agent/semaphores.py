@@ -26,9 +26,9 @@ VECTORSTORE_SEMAPHORE = asyncio.Semaphore(int(os.getenv("SEM_VECTORSTORE_LIMIT",
 # Shared by: PolicyAgent._invoke_llm_with_circuit_breaker
 LLM_SEMAPHORE = asyncio.Semaphore(int(os.getenv("SEM_LLM_LIMIT", "15")))
 
-# ── Router LLM (Anthropic Claude Haiku) ───────────────────────────────
-# Shared by: PolicyAgent._invoke_router_llm_with_retry
-# Lightweight classification — can afford more concurrency.
+# ── Intent Router (Jev / TypeSafe AI) ─────────────────────────────────
+# Shared by: PolicyAgent._route_intent
+# Fast System One model for classification — can afford concurrency.
 ROUTER_LLM_SEMAPHORE = asyncio.Semaphore(int(os.getenv("SEM_ROUTER_LLM_LIMIT", "20")))
 
 # ── OpenAI Embeddings (semantic cache) ────────────────────────────────
